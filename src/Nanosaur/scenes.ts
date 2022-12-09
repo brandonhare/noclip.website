@@ -328,7 +328,13 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 
 }
 
-
+function fixPixels(pixels : Uint16Array){
+	// fix bit format (move top alpha bit to bottom)
+	for (let i = 0; i < pixels.length; ++i){
+		let pixel = pixels[i];
+		pixels[i] = ((pixel & 0x7FFF) << 1) | ((pixel >> 15) & 1);
+	}
+}
 
 function parseModels(buffer : NamedArrayBufferSlice) : [Mesh[][], Texture[]]{
 	const view = buffer.createDataView();
@@ -598,11 +604,8 @@ function parseModels(buffer : NamedArrayBufferSlice) : [Mesh[][], Texture[]]{
 					}
 				}
 
-				// fix bit format (move top alpha bit to bottom)
-				for (let i = 0; i < pixels.length; ++i){
-					let pixel = pixels[i];
-					pixels[i] = ((pixel & 0x7FFF) << 1) | ((pixel >> 15) & 1);
-				}
+				
+				fixPixels(pixels);
 
 				currentTexture.width = width;
 				currentTexture.height = height;
@@ -675,12 +678,76 @@ function parseModels(buffer : NamedArrayBufferSlice) : [Mesh[][], Texture[]]{
 	return [meshGroups, textures];
 }
 
+function parseTerrainTileset(buffer : NamedArrayBufferSlice) : Uint16Array{
+	const view = buffer.createDataView();
+	const numTextureTiles = view.getUint32(0);
+	const numTexels = numTextureTiles * 32 * 32;
+	assert(numTexels * 2 == buffer.byteLength - 4);
+	const pixels = buffer.createTypedArray(Uint16Array, 4, undefined, Endianness.BIG_ENDIAN);
+	fixPixels(pixels);
+	return pixels;
+}
+function parseTerrain(terrainBuffer : NamedArrayBufferSlice){
+	const view = terrainBuffer.createDataView();
 
+	const POLYGON_SIZE = 140;
+
+	const textureLayerOffset = view.getUint32(0);
+	const heightmapLayerOffset = view.getUint32(4);
+	const pathLayerOffset = view.getUint32(8);
+	const objectListOffset = view.getUint32(12);
+	const heightmapTilesOffset = view.getUint32(20);
+	const width = view.getUint16(28); // in tiles
+	const height = view.getUint16(30); // in tiles
+	const textureAttributesOffset = view.getUint32(32);
+	const totalUnitsWidth = width * POLYGON_SIZE;
+	const totalUnitsHeight = height * POLYGON_SIZE;
+
+	// big endian uint16s
+	const textureLayerData = terrainBuffer.subarray(textureLayerOffset, 2 * width * height);
+	assert(heightmapLayerOffset > 0, "no heightmap data!");
+	const heightmapLayerData = terrainBuffer.subarray(heightmapLayerOffset, 2 * width * height);
+	assert(pathLayerOffset > 0, "no path data!");
+	const pathLayerData = terrainBuffer.subarray(pathLayerOffset, 2 * width * height);
+	// todo tile attributes
+
+	assert(heightmapTilesOffset > 0, "no heightmap tile data!");
+	// todo heightmap tile data
+
+	type Item = {
+		x : number,
+		y : number,
+		type : number,
+		param : number,
+		flags : number,
+	};
+
+	// load items
+	const numItems = view.getUint32(objectListOffset);
+	const items : Item[] = [];
+	let offset = objectListOffset + 4;
+	for (let i = 0; i < numItems; ++i){
+		const x = view.getUint16(offset);
+		const y = view.getUint16(offset + 2);
+		const type = view.getUint16(offset + 4);
+		const param = view.getUint32(offset + 6, true); // todo swap?
+		const flags = view.getUint16(offset + 10);
+		//const nextId = view.getUint16(offset + 12);
+		//const prevId = view.getUint16(offset + 16);
+		offset += 20;
+		items.push({x, y, type, param, flags});
+	}
+}
 
 class NanosaurSceneDesc implements Viewer.SceneDesc {
 	constructor(public id : string, public name : string){}
 
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+		const terrainTileset = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt").then(parseTerrainTileset);
+		const terrain = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter").then(parseTerrain);
+
+		return new NanosaurSceneRenderer(device, context, []);
+		/*
 		const models = await Promise.all([
 				"/Models/Global_Models2.3dmf",
 				"/Models/HighScores.3dmf",
@@ -701,6 +768,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		);
 
 		return new NanosaurSceneRenderer(device, context, models.map(([m])=>m).flat());
+		*/
 	}
 	
 }
