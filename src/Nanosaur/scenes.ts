@@ -66,6 +66,7 @@ void main() {
 uniform sampler2D u_Texture;
 in vec4 v_Colour;
 in vec2 v_UV;
+in vec3 v_Normal;
 
 void main(){
 	vec4 colour = u_Colour;
@@ -79,7 +80,10 @@ void main(){
 		#ifdef TEXTURE_HAS_ALPHA
 			if (colour.a < 0.5) { discard; }
 		#endif
+	#else
+		colour.xyz = (v_Normal.xzy + 1.0) * 0.5;
 	#endif
+
 
 
 	gl_FragColor = colour;
@@ -91,7 +95,7 @@ void main(){
 class Mesh {
 	numTriangles : number;
 	numVertices : number;
-	indices : Uint16Array;
+	indices : Uint16Array | Uint32Array;
 	vertices : Float32Array;
 	UVs?: Float32Array; // uv
 	normals?: Float32Array; // xyz
@@ -210,7 +214,7 @@ class StaticObject implements GraphObjBase {
 		this.inputLayout = cache.createInputLayout({
 			vertexBufferDescriptors: vertexLayoutDescriptors,
 			vertexAttributeDescriptors : vertexAttributeDescriptors,
-			indexBufferFormat : GfxFormat.U16_R,
+			indexBufferFormat : mesh.indices.BYTES_PER_ELEMENT === 2 ? GfxFormat.U16_R : GfxFormat.U32_R ,
 		});
 
 		const indexBufferDescriptor : GfxIndexBufferDescriptor = {
@@ -273,14 +277,21 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
         this.obj.push(new GridPlane(device, cache));
 
-		const pos : vec3 = [0,0,0];
+		const pos : vec3 = [1000,1000, 9000];
 		for (const a of models){
 			for (const m of a){
 				const obj = new StaticObject(device, cache, m)
-				mat4.fromTranslation(obj.modelMatrix, pos);
+				if (pos[0] != 1000){ // terrain hack
+					mat4.fromTranslation(obj.modelMatrix, pos);
+					mat4.scale(obj.modelMatrix, obj.modelMatrix, [-1,1,-1]);
+				}
 				this.obj.push(obj);
 			}
-			pos[0] += 150;
+			pos[0] += 200;
+			if (pos[0] >= 4000){
+				pos[0] = 1000;
+				pos[2] += 500;
+			}
 		}
 	}
 
@@ -687,74 +698,206 @@ function parseTerrainTileset(buffer : NamedArrayBufferSlice) : Uint16Array{
 	fixPixels(pixels);
 	return pixels;
 }
-function parseTerrain(terrainBuffer : NamedArrayBufferSlice){
-	const view = terrainBuffer.createDataView();
 
-	const POLYGON_SIZE = 140;
+
+function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Array) : Mesh{
+
+	const SUPERTILE_SIZE = 5; // tiles per supertile axis
+	const TERRAIN_POLYGON_SIZE = 140; // world units of terrain polygon
+	const OREOMAP_TILE_SIZE = 32; // pixels w/h of texture tile
+	const TERRAIN_HMTILE_SIZE = 32; // pixel w/h of heightmap
+	const MAP_TO_UNIT_VALUE = TERRAIN_POLYGON_SIZE / OREOMAP_TILE_SIZE;
+	const TERRAIN_SUPERTILE_UNIT_SIZE = SUPERTILE_SIZE * TERRAIN_POLYGON_SIZE; // world unit size of a supertile
+
+	const view = terrainBuffer.createDataView();
 
 	const textureLayerOffset = view.getUint32(0);
 	const heightmapLayerOffset = view.getUint32(4);
 	const pathLayerOffset = view.getUint32(8);
 	const objectListOffset = view.getUint32(12);
 	const heightmapTilesOffset = view.getUint32(20);
-	const width = view.getUint16(28); // in tiles
-	const height = view.getUint16(30); // in tiles
+	const terrainWidth = view.getUint16(28); // in tiles
+	const terrainDepth = view.getUint16(30); // in tiles
 	const textureAttributesOffset = view.getUint32(32);
-	const totalUnitsWidth = width * POLYGON_SIZE;
-	const totalUnitsHeight = height * POLYGON_SIZE;
+	const tileAnimDataOffset = view.getUint32(36);
 
-	// big endian uint16s
-	const textureLayerData = terrainBuffer.subarray(textureLayerOffset, 2 * width * height);
+	// gTerrainTextureLayer
+	const textureLayerData = terrainBuffer.createTypedArray(Uint16Array, textureLayerOffset, terrainWidth * terrainDepth,  Endianness.BIG_ENDIAN);
 	assert(heightmapLayerOffset > 0, "no heightmap data!");
-	const heightmapLayerData = terrainBuffer.subarray(heightmapLayerOffset, 2 * width * height);
+	// gTerrainHeightmapLayer
+	const heightmapLayerData = terrainBuffer.createTypedArray(Uint16Array, heightmapLayerOffset, terrainWidth * terrainDepth, Endianness.BIG_ENDIAN);
 	assert(pathLayerOffset > 0, "no path data!");
-	const pathLayerData = terrainBuffer.subarray(pathLayerOffset, 2 * width * height);
-	// todo tile attributes
+	// gTerrainPathLayer
+	const pathLayerData = terrainBuffer.createTypedArray(Uint16Array, pathLayerOffset, terrainWidth * terrainDepth, Endianness.BIG_ENDIAN);
 
+	// texture attributes
+	const numTextureAttributes = (tileAnimDataOffset - textureAttributesOffset) / 8; // hack from source port
+	type TileAttribute = {
+		bits : number,
+		param0 : number,
+		param1 : number,
+		param2 : number
+	};
+	// gTileAttributes
+	const tileAttributes : TileAttribute[] = [];
+	for (let i = 0; i < numTextureAttributes; ++i){
+		tileAttributes.push({
+			bits : view.getUint16(textureAttributesOffset + i * 8 + 0),
+			param0 : view.getInt16(textureAttributesOffset + i * 8 + 2),
+			param1 : view.getUint8(textureAttributesOffset + i * 8 + 4),
+			param2 : view.getUint8(textureAttributesOffset + i * 8 + 5),
+		});
+	}
+
+	
 	assert(heightmapTilesOffset > 0, "no heightmap tile data!");
-	// todo heightmap tile data
+	const numHeightmapTiles = (textureAttributesOffset - heightmapTilesOffset) / (32*32);
+	// gTerrainHeightMapPtrs
+	const heightmapTiles = terrainBuffer.createTypedArray(Uint8Array, heightmapTilesOffset, numHeightmapTiles * 32 * 32);
 
 	type Item = {
 		x : number,
 		y : number,
 		type : number,
-		param : number,
+		param0 : number,
+		param1 : number,
+		param2 : number,
+		param3 : number,
 		flags : number,
 	};
 
 	// load items
 	const numItems = view.getUint32(objectListOffset);
 	const items : Item[] = [];
-	let offset = objectListOffset + 4;
-	for (let i = 0; i < numItems; ++i){
+	let startCoordX = 0;
+	let startCoordY = 0;
+	let startCoordAim = 0;
+	for (let offset = objectListOffset + 4; offset < objectListOffset + 4 + 20 * numItems; offset += 20){
 		const x = view.getUint16(offset);
 		const y = view.getUint16(offset + 2);
 		const type = view.getUint16(offset + 4);
-		const param = view.getUint32(offset + 6, true); // todo swap?
+		const param0 = view.getUint8(offset + 6);
+		const param1 = view.getUint8(offset + 7);
+		const param2 = view.getUint8(offset + 8);
+		const param3 = view.getUint8(offset + 9);
 		const flags = view.getUint16(offset + 10);
 		//const nextId = view.getUint16(offset + 12);
 		//const prevId = view.getUint16(offset + 16);
-		offset += 20;
-		items.push({x, y, type, param, flags});
+		items.push({x, y, type, param0, param1, param2, param3, flags});
+
+		if (type === 0){ // start position
+			startCoordX = x * MAP_TO_UNIT_VALUE; // map to world unit
+			startCoordY = y * MAP_TO_UNIT_VALUE; 
+			startCoordAim = param0;
+		}
 	}
+
+	function getTerrainHeightAtRowCol(row : number, col : number) : number {
+		if (row < 0 || col < 0 || row >= terrainDepth || col >= terrainWidth)
+			return 0;
+
+		const tile = heightmapLayerData[row * terrainWidth + col];
+		assert(tile != undefined, "missing heightmap layer tile");
+		const tileNum = tile & 0x0FFF;
+		const flipX = tile & (1<<15);
+		const flipY = tile & (1<<14);
+
+		const x = flipX ? TERRAIN_HMTILE_SIZE - 1 : 0;
+		const y = flipY ? TERRAIN_HMTILE_SIZE - 1 : 0;
+
+		const height = heightmapTiles[tileNum * TERRAIN_HMTILE_SIZE * TERRAIN_HMTILE_SIZE + y * TERRAIN_HMTILE_SIZE + x];
+		assert(height != undefined, "missing heightmap tile");
+		return height * 4; // extrude factor
+	}
+
+
+
+	// create model
+	const result = new Mesh();
+
+	// create verts
+	result.numVertices = (terrainWidth + 1) * (terrainDepth + 1);
+	const verts = new Float32Array(result.numVertices * 3);
+	result.vertices = verts;
+	const stride = (terrainWidth + 1) * 3;
+	
+	function vertIndex(row : number, col : number){
+		return row * stride + col * 3;
+	}
+
+	for (let row = 0; row <= terrainDepth; row++){
+		const z = row * TERRAIN_POLYGON_SIZE;
+		for (let col = 0; col <= terrainWidth; ++col){
+			const x = col * TERRAIN_POLYGON_SIZE;
+			const y = getTerrainHeightAtRowCol(row, col);
+			let index = vertIndex(row, col);
+			verts[index++] = x;
+			verts[index++] = y;
+			verts[index++] = z;
+		}
+	}
+
+	const normals = new Float32Array(result.numVertices * 3);
+	result.normals = normals;
+	let vec : vec3 = [0,0,0];
+	for (let row = 0; row <= terrainDepth; row++){
+		for (let col = 0; col <= terrainWidth; ++col){
+			const index = vertIndex(row, col);
+			//const centerHeight = verts[index + 1];
+			const leftHeight = col === 0 ? 0 : verts[index - 2];
+			const rightHeight = col === terrainWidth ? 0 : verts[index + 4];
+			const backHeight = row === 0 ? 0 : verts[index - stride + 1];
+			const frontHeight = row === terrainDepth ? 0 : verts[index + stride + 1];
+
+			vec3.normalize(vec, [(leftHeight - rightHeight) * 0.1, 1, (backHeight - frontHeight) * 0.1]);
+			normals.set(vec, index);
+		}
+	}
+
+	result.numTriangles = terrainWidth * terrainDepth * 2;
+	const indices = new Uint32Array(result.numTriangles * 3);
+	result.indices = indices;
+	const stride2 = terrainWidth + 1;
+	let index = 0;
+	for (let row = 0; row < terrainDepth; row++){
+		for (let col = 0; col < terrainWidth ; ++col){
+			const baseIndex = row * stride2 + col;
+			indices[index++] = baseIndex
+			indices[index++] = baseIndex + stride2;
+			indices[index++] = baseIndex + 1;
+
+			indices[index++] = baseIndex + stride2;
+			indices[index++] = baseIndex + 1 + stride2;
+			indices[index++] = baseIndex + 1;
+		}
+	}
+
+	// todo: optimize mesh to get vertex indices back to a u16
+	// todo: rotate triangles to align with slopes
+	// todo: UVs
+	// todo: texture
+
+	return result;
 }
+
 
 class NanosaurSceneDesc implements Viewer.SceneDesc {
 	constructor(public id : string, public name : string){}
 
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 		const terrainTileset = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt").then(parseTerrainTileset);
-		const terrain = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter").then(parseTerrain);
+		const terrain = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter");
+		const terrainModel = parseTerrain(terrain, terrainTileset);
 
-		return new NanosaurSceneRenderer(device, context, []);
-		/*
+		//return new NanosaurSceneRenderer(device, context, [[terrainModel]]);
+		
 		const models = await Promise.all([
-				"/Models/Global_Models2.3dmf",
-				"/Models/HighScores.3dmf",
-				"/Models/Infobar_Models.3dmf",
+				//"/Models/Global_Models2.3dmf",
+				//"/Models/HighScores.3dmf",
+				//"/Models/Infobar_Models.3dmf",
 				"/Models/Level1_Models.3dmf",
-				"/Models/MenuInterface.3dmf",
-				"/Models/Title.3dmf",
+				//"/Models/MenuInterface.3dmf",
+				//"/Models/Title.3dmf",
 				"/Skeletons/Deinon.3dmf",
 				//"/Skeletons/Diloph.3dmf" // weird
 				"/Skeletons/Ptera.3dmf",
@@ -766,9 +909,10 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 					.then(parseModels)
 			)
 		);
+		models.unshift([[[terrainModel]], []]);
 
 		return new NanosaurSceneRenderer(device, context, models.map(([m])=>m).flat());
-		*/
+		
 	}
 	
 }
