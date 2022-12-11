@@ -1,5 +1,7 @@
 
 import * as Viewer from '../viewer';
+import * as UI from "../ui";
+
 import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode } from "../gfx/platform/GfxPlatform";
 import { GraphObjBase, SceneContext } from "../SceneBase";
 import { GfxRenderHelper } from '../gfx/render/GfxRenderHelper';
@@ -18,6 +20,8 @@ import { mat4, vec3, vec4 } from "gl-matrix";
 import { fillColor, fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { TextureMapping } from "../TextureHolder";
+import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
+import ArrayBufferSlice from "../ArrayBufferSlice";
 
 const pathBase = "nanosaur_raw";
 
@@ -108,31 +112,40 @@ class Texture {
 	width : number;
 	height : number;
 	pixelFormat : GfxFormat;
-	pixels: Uint16Array | undefined; // todo more
+	pixels: Uint16Array;
 	wrapU : GfxWrapMode;
 	wrapV : GfxWrapMode;
 	hasAlpha = false;
 };
 
-class Cache extends GfxRenderCache {
+class Cache extends GfxRenderCache implements UI.TextureListHolder {
 
 	textures = new Map<Texture, GfxTexture>();
 
-	createTexture(texture : Texture){
+	viewerTextures : Viewer.Texture[] = [];
+	onnewtextures: (() => void) | null = null;
+
+
+	createTexture(texture : Texture, name? : string){
 		let result = this.textures.get(texture);
 		if (result === undefined){
 			result = this.device.createTexture(makeTextureDescriptor2D(texture.pixelFormat, texture.width, texture.height, 1));
 			this.textures.set(texture, result);
-			this.device.uploadTextureData(result, 0, [texture.pixels!]);
+			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
-			
+			this.viewerTextures.push({
+				name : name ?? `Texture ${this.viewerTextures.length + 1}`,
+				surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer), texture.width, texture.height, texture.pixelFormat)],
+			});
+			if (this.onnewtextures)
+				this.onnewtextures();
 		}
 		return result;
 	}
 
-	createTextureMapping(texture : Texture){
+	createTextureMapping(texture : Texture, name? : string){
 		const mapping = new TextureMapping();
-		mapping.gfxTexture = this.createTexture(texture);
+		mapping.gfxTexture = this.createTexture(texture, name);
 
 		/*
 		mapping.gfxSampler = this.createSampler({
@@ -274,9 +287,13 @@ class StaticObject implements GraphObjBase {
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
     obj: GraphObjBase[] = [];
+	
+	textureHolder : UI.TextureListHolder;
+
 
 	constructor(device : GfxDevice, context : SceneContext, models : Mesh[][]){
 		const cache = new Cache(device);
+		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
         this.obj.push(new GridPlane(device, cache));
 
@@ -624,6 +641,12 @@ function parseModels(buffer : NamedArrayBufferSlice) : [Mesh[][], Texture[]]{
 
 				
 				fixPixels(pixels);
+
+				// set alpha bit on opaque textures (for texture viewer)
+				if (!currentTexture.hasAlpha){
+					for (let i = 0; i < pixels.length; ++i)
+						pixels[i] |= 1;
+				}
 
 				currentTexture.width = width;
 				currentTexture.height = height;
