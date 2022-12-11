@@ -96,7 +96,7 @@ class Mesh {
 	numTriangles : number;
 	numVertices : number;
 	indices : Uint16Array | Uint32Array;
-	vertices : Float32Array;
+	vertices : Float32Array | Uint16Array;
 	UVs?: Float32Array; // uv
 	normals?: Float32Array; // xyz
 	vertexColours?: Float32Array; // rgb
@@ -198,7 +198,10 @@ class StaticObject implements GraphObjBase {
 			return true;
 		}
 		
-		pushBuffer(mesh.vertices.buffer, 12, Program.a_Position, GfxFormat.F32_RGB);
+		if (mesh.vertices.BYTES_PER_ELEMENT === 2)
+			pushBuffer(mesh.vertices.buffer, 6, Program.a_Position, GfxFormat.U16_RGB);
+		else
+			pushBuffer(mesh.vertices.buffer, 12, Program.a_Position, GfxFormat.F32_RGB);
 		const hasUvs = pushBuffer(mesh.UVs?.buffer, 8, Program.a_UVs, GfxFormat.F32_RG);
 		const hasNormals = pushBuffer(mesh.normals?.buffer, 12, Program.a_Normals, GfxFormat.F32_RGB);
 		const hasColours = pushBuffer(mesh.vertexColours?.buffer, 12, Program.a_Colours, GfxFormat.F32_RGB);
@@ -278,10 +281,14 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
         this.obj.push(new GridPlane(device, cache));
 
 		const pos : vec3 = [1000,1000, 9000];
+		let first = true;
 		for (const a of models){
 			for (const m of a){
 				const obj = new StaticObject(device, cache, m)
-				if (pos[0] != 1000){ // terrain hack
+				if (first){ // terrain hack
+					mat4.scale(obj.modelMatrix, obj.modelMatrix, [140, 4, 140]);
+					first = false;
+				} else {
 					mat4.fromTranslation(obj.modelMatrix, pos);
 					mat4.scale(obj.modelMatrix, obj.modelMatrix, [-1,1,-1]);
 				}
@@ -807,7 +814,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 
 		const height = heightmapTiles[tileNum * TERRAIN_HMTILE_SIZE * TERRAIN_HMTILE_SIZE + y * TERRAIN_HMTILE_SIZE + x];
 		assert(height != undefined, "missing heightmap tile");
-		return height * 4; // extrude factor
+		return height ;//* 4; // extrude factor
 	}
 
 
@@ -817,7 +824,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 
 	// create verts
 	result.numVertices = (terrainWidth + 1) * (terrainDepth + 1);
-	const verts = new Float32Array(result.numVertices * 3);
+	const verts = new Uint16Array(result.numVertices * 3);
 	result.vertices = verts;
 	const stride = (terrainWidth + 1) * 3;
 	
@@ -826,9 +833,9 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 	}
 
 	for (let row = 0; row <= terrainDepth; row++){
-		const z = row * TERRAIN_POLYGON_SIZE;
+		const z = row ;//* TERRAIN_POLYGON_SIZE;
 		for (let col = 0; col <= terrainWidth; ++col){
-			const x = col * TERRAIN_POLYGON_SIZE;
+			const x = col ;//* TERRAIN_POLYGON_SIZE;
 			const y = getTerrainHeightAtRowCol(row, col);
 			let index = vertIndex(row, col);
 			verts[index++] = x;
@@ -862,18 +869,36 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 	for (let row = 0; row < terrainDepth; row++){
 		for (let col = 0; col < terrainWidth ; ++col){
 			const baseIndex = row * stride2 + col;
-			indices[index++] = baseIndex
-			indices[index++] = baseIndex + stride2;
-			indices[index++] = baseIndex + 1;
 
-			indices[index++] = baseIndex + stride2;
-			indices[index++] = baseIndex + 1 + stride2;
-			indices[index++] = baseIndex + 1;
+
+			const h1 = verts[baseIndex * 3 + 1];
+			const h2 = verts[(baseIndex + 1) * 3 + 1];
+			const h3 = verts[(baseIndex + stride2 + 1) * 3 + 1];
+			const h4 = verts[(baseIndex + stride2) * 3 + 1];
+
+			const splitBackward = Math.abs(h1 - h3) > Math.abs(h2 - h4);
+
+			if (splitBackward) {
+				indices[index++] = baseIndex + 1;
+				indices[index++] = baseIndex
+				indices[index++] = baseIndex + stride2;
+				
+				indices[index++] = baseIndex + stride2;
+				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex + 1;
+			} else {
+				indices[index++] = baseIndex
+				indices[index++] = baseIndex + stride2;
+				indices[index++] = baseIndex + stride2 + 1;
+
+				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex + 1
+				indices[index++] = baseIndex;
+			}
 		}
 	}
 
 	// todo: optimize mesh to get vertex indices back to a u16
-	// todo: rotate triangles to align with slopes
 	// todo: UVs
 	// todo: texture
 
