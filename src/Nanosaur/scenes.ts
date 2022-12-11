@@ -2,7 +2,7 @@
 import * as Viewer from '../viewer';
 import * as UI from "../ui";
 
-import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode } from "../gfx/platform/GfxPlatform";
 import { GraphObjBase, SceneContext } from "../SceneBase";
 import { GfxRenderHelper } from '../gfx/render/GfxRenderHelper';
 
@@ -30,14 +30,16 @@ class Program extends DeviceProgram {
 	static a_UVs = 1;
 	static a_Colours = 2;
 	static a_Normals = 3;
+	static a_TextureIds = 4;
 
-	constructor(uvs : boolean, normals : boolean, colours : boolean, texture : boolean, textureHasAlpha : boolean){
+	constructor(uvs : boolean, normals : boolean, colours : boolean, texture : boolean, textureHasAlpha : boolean, terrain : boolean=false){
 		super();
-		assert(uvs === texture, "uv/texture mismatch!");
+		assert(uvs === texture || terrain, "uv/texture mismatch!");
 		this.setDefineBool("HAS_NORMALS", normals);
 		this.setDefineBool("HAS_COLOURS", colours);
 		this.setDefineBool("HAS_TEXTURE", texture);
 		this.setDefineBool("TEXTURE_HAS_ALPHA", textureHasAlpha);
+		this.setDefineBool("TERRAIN", terrain);
 	}
 
 	override both = 
@@ -53,24 +55,39 @@ layout(location = ${Program.a_Position}) in vec3 a_Position;
 layout(location = ${Program.a_UVs}) in vec2 a_UV;
 layout(location = ${Program.a_Normals}) in vec3 a_Normal;
 layout(location = ${Program.a_Colours}) in vec3 a_Colour;
+#ifdef TERRAIN
+layout(location = ${Program.a_TextureIds}) in float a_TextureId;
+#endif
 
 out vec4 v_Colour;
 out vec3 v_Normal;
 out vec2 v_UV;
+flat out float v_Id;
 
 void main() {
 	v_Colour = vec4(a_Colour, 1.0);
 	v_Normal = a_Normal;
 	v_UV = a_UV;
+	#ifdef TERRAIN
+	v_UV = a_Position.xz;
+	v_Id = a_TextureId;
+	#endif
     gl_Position = Mul(u_Projection, Mul(u_MV, vec4(a_Position, 1.0)));
 }
 `;
 	override frag = 
 `
+#ifdef TERRAIN
+precision mediump float;
+precision lowp sampler2DArray;
+uniform sampler2DArray u_TerrainTexture;
+#else
 uniform sampler2D u_Texture;
+#endif
 in vec4 v_Colour;
 in vec2 v_UV;
 in vec3 v_Normal;
+flat in float v_Id;
 
 void main(){
 	vec4 colour = u_Colour;
@@ -84,10 +101,14 @@ void main(){
 		#ifdef TEXTURE_HAS_ALPHA
 			if (colour.a < 0.5) { discard; }
 		#endif
-	#else
-		colour.xyz = (v_Normal.xzy + 1.0) * 0.5;
 	#endif
 
+	#ifdef TERRAIN
+		//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
+		vec2 uv = fract(v_UV);
+
+		colour = texture(SAMPLER_2D(u_TerrainTexture), vec3(uv, v_Id));
+	#endif
 
 
 	gl_FragColor = colour;
@@ -106,16 +127,18 @@ class Mesh {
 	vertexColours?: Float32Array; // rgb
 	texture? : Texture;
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
+	textureIds? : Uint16Array; // terrain hack
 };
 
 class Texture {
 	width : number;
 	height : number;
 	pixelFormat : GfxFormat;
-	pixels: Uint16Array;
-	wrapU : GfxWrapMode;
-	wrapV : GfxWrapMode;
+	pixels: Uint16Array | Uint8Array;
+	wrapU : GfxWrapMode = GfxWrapMode.Repeat;
+	wrapV : GfxWrapMode = GfxWrapMode.Repeat;
 	hasAlpha = false;
+	name? : string;
 };
 
 class Cache extends GfxRenderCache implements UI.TextureListHolder {
@@ -126,7 +149,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	onnewtextures: (() => void) | null = null;
 
 
-	createTexture(texture : Texture, name? : string){
+	createTexture(texture : Texture){
 		let result = this.textures.get(texture);
 		if (result === undefined){
 			result = this.device.createTexture(makeTextureDescriptor2D(texture.pixelFormat, texture.width, texture.height, 1));
@@ -134,7 +157,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
 			this.viewerTextures.push({
-				name : name ?? `Texture ${this.viewerTextures.length + 1}`,
+				name : texture.name ?? `Texture ${this.viewerTextures.length + 1}`,
 				surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer), texture.width, texture.height, texture.pixelFormat)],
 			});
 			if (this.onnewtextures)
@@ -143,19 +166,19 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		return result;
 	}
 
-	createTextureMapping(texture : Texture, name? : string){
+	createTextureMapping(texture : Texture){
 		const mapping = new TextureMapping();
-		mapping.gfxTexture = this.createTexture(texture, name);
+		mapping.gfxTexture = this.createTexture(texture);
 
-		/*
+		
 		mapping.gfxSampler = this.createSampler({
-			magFilter : GfxTexFilterMode.Point,
-			minFilter : GfxTexFilterMode.Point,
+			magFilter : GfxTexFilterMode.Bilinear,
+			minFilter : GfxTexFilterMode.Bilinear,
 			wrapS : texture.wrapU,
 			wrapT : texture.wrapV,
-			mipFilter : GfxMipFilterMode.Nearest,
+			mipFilter : GfxMipFilterMode.NoMip,
 		});
-		*/
+		
 		
 		
 		return mapping;
@@ -176,7 +199,6 @@ class StaticObject implements GraphObjBase {
 	inputState : GfxInputState;
 	modelMatrix = mat4.create();
 	colour : GfxColor;
-	texture? : GfxTexture;
 	textureMapping : TextureMapping[] = [];
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Mesh){
@@ -218,6 +240,7 @@ class StaticObject implements GraphObjBase {
 		const hasUvs = pushBuffer(mesh.UVs?.buffer, 8, Program.a_UVs, GfxFormat.F32_RG);
 		const hasNormals = pushBuffer(mesh.normals?.buffer, 12, Program.a_Normals, GfxFormat.F32_RGB);
 		const hasColours = pushBuffer(mesh.vertexColours?.buffer, 12, Program.a_Colours, GfxFormat.F32_RGB);
+		pushBuffer(mesh.textureIds?.buffer, 2, Program.a_TextureIds, GfxFormat.U16_R);
 
 		const texture = mesh.texture;
 		if (texture){
@@ -245,10 +268,10 @@ class StaticObject implements GraphObjBase {
 			numUniformBuffers : 1,
 			numSamplers : 1,
 		}]);
-        renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
         renderInst.setGfxProgram(this.gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
         renderInst.setMegaStateFlags({ cullMode: GfxCullMode.Back });
+        renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
 
 		if (this.colour.a < 1.0){
@@ -287,11 +310,11 @@ class StaticObject implements GraphObjBase {
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
     obj: GraphObjBase[] = [];
-	
+
 	textureHolder : UI.TextureListHolder;
 
 
-	constructor(device : GfxDevice, context : SceneContext, models : Mesh[][]){
+	constructor(device : GfxDevice, context : SceneContext, models : Mesh[][], terrainTex : GfxTexture){
 		const cache = new Cache(device);
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
@@ -304,6 +327,21 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 				const obj = new StaticObject(device, cache, m)
 				if (first){ // terrain hack
 					mat4.scale(obj.modelMatrix, obj.modelMatrix, [140, 4, 140]);
+					const mapping = new TextureMapping();
+					mapping.gfxTexture = terrainTex;
+					mapping.gfxSampler = device.createSampler({
+						magFilter : GfxTexFilterMode.Bilinear,
+						minFilter : GfxTexFilterMode.Bilinear,
+						mipFilter : GfxMipFilterMode.NoMip,
+						wrapS : GfxWrapMode.Mirror,
+						wrapT : GfxWrapMode.Mirror,
+					});
+					obj.textureMapping.push(mapping);
+					
+					obj.gfxProgram = cache.createProgram(new Program(
+						false, true, false, false, false, true
+					));
+					
 					first = false;
 				} else {
 					mat4.fromTranslation(obj.modelMatrix, pos);
@@ -730,7 +768,7 @@ function parseTerrainTileset(buffer : NamedArrayBufferSlice) : Uint16Array{
 }
 
 
-function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Array) : Mesh{
+function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Array) : [Mesh, Texture[]]{
 
 	const SUPERTILE_SIZE = 5; // tiles per supertile axis
 	const TERRAIN_POLYGON_SIZE = 140; // world units of terrain polygon
@@ -781,7 +819,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 
 	
 	assert(heightmapTilesOffset > 0, "no heightmap tile data!");
-	const numHeightmapTiles = (textureAttributesOffset - heightmapTilesOffset) / (32*32);
+	const numHeightmapTiles = ((textureAttributesOffset - heightmapTilesOffset) / (32*32)) & 0x0FFF;
 	// gTerrainHeightMapPtrs
 	const heightmapTiles = terrainBuffer.createTypedArray(Uint8Array, heightmapTilesOffset, numHeightmapTiles * 32 * 32);
 
@@ -883,6 +921,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 			normals.set(vec, index);
 		}
 	}
+	
 
 	result.numTriangles = terrainWidth * terrainDepth * 2;
 	const indices = new Uint32Array(result.numTriangles * 3);
@@ -902,17 +941,17 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 			const splitBackward = Math.abs(h1 - h3) > Math.abs(h2 - h4);
 
 			if (splitBackward) {
-				indices[index++] = baseIndex + 1;
 				indices[index++] = baseIndex
 				indices[index++] = baseIndex + stride2;
+				indices[index++] = baseIndex + 1;
 				
 				indices[index++] = baseIndex + stride2;
 				indices[index++] = baseIndex + stride2 + 1;
 				indices[index++] = baseIndex + 1;
 			} else {
-				indices[index++] = baseIndex
 				indices[index++] = baseIndex + stride2;
 				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex
 
 				indices[index++] = baseIndex + stride2 + 1;
 				indices[index++] = baseIndex + 1
@@ -921,11 +960,39 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 		}
 	}
 
-	// todo: optimize mesh to get vertex indices back to a u16
-	// todo: UVs
-	// todo: texture
 
-	return result;
+	// textures
+	const textureBuffer = new Uint16Array(result.numVertices);
+	result.textureIds = textureBuffer;
+	for (let row = 0; row <= terrainDepth; row++){
+		for (let col = 0; col <= terrainWidth; ++col){
+			const terrainId = textureLayerData[row * terrainWidth + col] ?? 0;
+			const tileId = terrainId & 0xFFF;
+			textureBuffer[row * (terrainWidth + 1) + col] = tileId;
+		}
+	}
+
+	// todo: optimize mesh to get vertex indices back to a u16?
+	// todo: texture rotations
+	// todo: texture IDs for split quads
+
+	// debug: create heightmap textures
+	const heightmapTextures : Texture[] = [];
+
+	for (let i = 0; i < numHeightmapTiles; ++i){
+		const texture = new Texture();
+		texture.pixels = heightmapTiles.slice(i *32*32, (i+1)* 32*32);
+		for (let j = 0; j < texture.pixels.length; ++j)
+			texture.pixels[j] |= 1;
+		texture.pixelFormat = GfxFormat.U8_R_NORM,
+		texture.hasAlpha = false;
+		texture.height = 32;
+		texture.width = 32;
+		texture.name = `Heightmap Tile ${i}`
+		heightmapTextures.push(texture);
+	}
+
+	return [result, heightmapTextures];
 }
 
 
@@ -935,7 +1002,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 		const terrainTileset = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt").then(parseTerrainTileset);
 		const terrain = await context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter");
-		const terrainModel = parseTerrain(terrain, terrainTileset);
+		const [terrainModel, terrainHeightmapTextures] = parseTerrain(terrain, terrainTileset);
 
 		//return new NanosaurSceneRenderer(device, context, [[terrainModel]]);
 		
@@ -959,7 +1026,34 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		);
 		models.unshift([[[terrainModel]], []]);
 
-		return new NanosaurSceneRenderer(device, context, models.map(([m])=>m).flat());
+		const terrainTextures : Texture[] = [];
+		for (let i = 0; i < terrainTileset.length / 32 / 32; ++i){
+			const tex = new Texture();
+			tex.name = `Terrain Texture ${i}`;
+			tex.hasAlpha = false;
+			tex.width = 32;
+			tex.height = 32;
+			tex.pixelFormat = GfxFormat.U16_RGBA_5551;
+			tex.pixels = terrainTileset.slice(i * 32 * 32, (i+1) * 32 * 32);
+			for (let j = 0; j < tex.pixels.length; ++j)
+				tex.pixels[j] |= 1;
+			terrainTextures.push(tex);
+		}
+
+
+		const terrainTex = device.createTexture({
+			depth : terrainTextures.length,
+			width : 32,
+			height : 32,
+			pixelFormat : GfxFormat.U16_RGBA_5551,
+			usage: GfxTextureUsage.Sampled,
+			dimension: GfxTextureDimension.n2DArray,
+			numLevels : 1
+		});
+		device.uploadTextureData(terrainTex, 0, [terrainTileset]);
+
+
+		return new NanosaurSceneRenderer(device, context, models.map(([m])=>m).flat(), terrainTex);
 		
 	}
 	
