@@ -62,7 +62,7 @@ layout(location = ${Program.a_TextureIds}) in float a_TextureId;
 out vec4 v_Colour;
 out vec3 v_Normal;
 out vec2 v_UV;
-flat out float v_Id;
+flat out int v_Id;
 
 void main() {
 	v_Colour = vec4(a_Colour, 1.0);
@@ -70,7 +70,7 @@ void main() {
 	v_UV = a_UV;
 	#ifdef TERRAIN
 	v_UV = a_Position.xz;
-	v_Id = a_TextureId;
+	v_Id = int(a_TextureId);
 	#endif
     gl_Position = Mul(u_Projection, Mul(u_MV, vec4(a_Position, 1.0)));
 }
@@ -87,7 +87,7 @@ uniform sampler2D u_Texture;
 in vec4 v_Colour;
 in vec2 v_UV;
 in vec3 v_Normal;
-flat in float v_Id;
+flat in int v_Id;
 
 void main(){
 	vec4 colour = u_Colour;
@@ -107,7 +107,61 @@ void main(){
 		//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
 		vec2 uv = fract(v_UV);
 
-		colour = texture(SAMPLER_2D(u_TerrainTexture), vec3(uv, v_Id));
+		const int TILE_FLIPX_MASK = (1<<15);
+		const int TILE_FLIPY_MASK = (1<<14);
+		const int TILE_FLIPXY_MASK = (TILE_FLIPY_MASK|TILE_FLIPX_MASK);
+		const int TILE_ROTATE_MASK = ((1<<13)|(1<<12));
+		const int TILE_ROT1 = (1<<12);
+		const int TILE_ROT2 = (2<<12);
+		const int TILE_ROT3 = (3<<12);
+
+		int flipBits = v_Id & (TILE_FLIPXY_MASK | TILE_ROTATE_MASK);
+		int textureId = v_Id & 0xFFF;
+
+		switch (flipBits) {
+			case 0:
+			case TILE_FLIPXY_MASK | TILE_ROT2:
+				break;
+			case TILE_FLIPX_MASK:
+			case TILE_FLIPY_MASK | TILE_ROT2:
+				uv.x = 1.0 - uv.x;
+				//textureId = 254;
+				break;
+			case TILE_FLIPY_MASK:
+			case TILE_FLIPX_MASK | TILE_ROT2:
+				uv.y = 1.0 - uv.y;
+				//textureId = 254;
+				break;
+			case TILE_FLIPXY_MASK:
+			case TILE_ROT2:
+				uv = 1.0 - uv;
+				//textureId = 254;
+				break;
+			case TILE_ROT1:
+			case TILE_FLIPXY_MASK | TILE_ROT3:
+				uv = vec2(uv.y, 1.0 - uv.x); // todo verify
+				//textureId = 254;
+				break;
+			case TILE_ROT3:
+			case TILE_FLIPXY_MASK | TILE_ROT1:
+				uv = vec2(1.0 - uv.y, uv.x); // todo verify
+				//textureId = 254;
+				break;
+			case TILE_FLIPX_MASK | TILE_ROT1:
+			case TILE_FLIPY_MASK | TILE_ROT3:
+				uv = vec2(1.0 - uv.y, 1.0 - uv.x); // todo verify
+				//textureId = 254;
+				break;	
+			case TILE_FLIPX_MASK | TILE_ROT3:
+			case TILE_FLIPY_MASK | TILE_ROT1:
+				uv = uv.yx; // todo verify
+				//textureId = 254;
+			default:
+				//textureId = 254;
+				break;
+		}
+
+		colour = texture(SAMPLER_2D(u_TerrainTexture), vec3(uv, textureId));
 	#endif
 
 
@@ -330,8 +384,8 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 					const mapping = new TextureMapping();
 					mapping.gfxTexture = terrainTex;
 					mapping.gfxSampler = device.createSampler({
-						magFilter : GfxTexFilterMode.Bilinear,
-						minFilter : GfxTexFilterMode.Bilinear,
+						magFilter : GfxTexFilterMode.Point,
+						minFilter : GfxTexFilterMode.Point,
 						mipFilter : GfxMipFilterMode.NoMip,
 						wrapS : GfxWrapMode.Mirror,
 						wrapT : GfxWrapMode.Mirror,
@@ -923,43 +977,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 	}
 	
 
-	result.numTriangles = terrainWidth * terrainDepth * 2;
-	const indices = new Uint32Array(result.numTriangles * 3);
-	result.indices = indices;
 	const stride2 = terrainWidth + 1;
-	let index = 0;
-	for (let row = 0; row < terrainDepth; row++){
-		for (let col = 0; col < terrainWidth ; ++col){
-			const baseIndex = row * stride2 + col;
-
-
-			const h1 = verts[baseIndex * 3 + 1];
-			const h2 = verts[(baseIndex + 1) * 3 + 1];
-			const h3 = verts[(baseIndex + stride2 + 1) * 3 + 1];
-			const h4 = verts[(baseIndex + stride2) * 3 + 1];
-
-			const splitBackward = Math.abs(h1 - h3) > Math.abs(h2 - h4);
-
-			if (splitBackward) {
-				indices[index++] = baseIndex
-				indices[index++] = baseIndex + stride2;
-				indices[index++] = baseIndex + 1;
-				
-				indices[index++] = baseIndex + stride2;
-				indices[index++] = baseIndex + stride2 + 1;
-				indices[index++] = baseIndex + 1;
-			} else {
-				indices[index++] = baseIndex + stride2;
-				indices[index++] = baseIndex + stride2 + 1;
-				indices[index++] = baseIndex
-
-				indices[index++] = baseIndex + stride2 + 1;
-				indices[index++] = baseIndex + 1
-				indices[index++] = baseIndex;
-			}
-		}
-	}
-
 
 	// textures
 	const textureBuffer = new Uint16Array(result.numVertices);
@@ -967,18 +985,206 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 	for (let row = 0; row <= terrainDepth; row++){
 		for (let col = 0; col <= terrainWidth; ++col){
 			const terrainId = textureLayerData[row * terrainWidth + col] ?? 0;
-			const tileId = terrainId & 0xFFF;
-			textureBuffer[row * (terrainWidth + 1) + col] = tileId;
+			textureBuffer[row * stride2 + col] = terrainId;
 		}
 	}
 
+
+	function getSlope(baseIndex : number) {
+		const h1 = verts[baseIndex * 3 + 1];
+		const h2 = verts[(baseIndex + 1) * 3 + 1];
+		const h3 = verts[(baseIndex + stride2 + 1) * 3 + 1];
+		const h4 = verts[(baseIndex + stride2) * 3 + 1];
+
+		return Math.abs(h1 - h3) - Math.abs(h2 - h4);
+	}
+	function needsFlip(row : number, col : number){
+		if (row === terrainDepth || col === terrainWidth)
+		return true;
+		return getSlope(row * stride2 + col) > 0;
+	}
+	function canFlip(row : number, col : number) : boolean{
+		if (row === terrainDepth || col === terrainWidth)
+			return true;
+		const baseIndex = row * stride2 + col;
+		const slope = getSlope(baseIndex);
+		if (slope !== 0) return slope > 0;
+		return canFlip(row + 1, col) || canFlip(row, col + 1);
+	}
+
+
+
+	result.numTriangles = terrainWidth * terrainDepth * 2;
+	const indices = new Uint32Array(result.numTriangles * 3);
+	result.indices = indices;
+	let index = 0;
+
+	const needsTextureReplacement = new Map<number, number>();
+	const needsNewVert = new Map<number, number>();
+	const flipped = new Set<number>();
+
+	/*
+	for (let row = 0; row <= terrainDepth; ++row)
+		flipped.add(row * stride2 + terrainWidth);
+	for (let col = 0; col <= terrainWidth; ++col)
+		flipped.add(terrainDepth * stride2 + col);
+	*/
+
+	for (let row = 0; row < terrainDepth; row++){
+		for (let col = 0; col < terrainWidth ; ++col){
+			const baseIndex = row * stride2 + col;
+
+			const textureData = textureBuffer[baseIndex];
+
+			if (needsFlip(row, col)) {
+
+				flipped.add(baseIndex);
+
+				if (needsFlip(row, col + 1) && (needsTextureReplacement.get(baseIndex + 1) ?? textureData) === textureData) {
+					indices[index++] = baseIndex
+					indices[index++] = baseIndex + stride2;
+					indices[index++] = baseIndex + 1;
+					
+					indices[index++] = baseIndex + stride2;
+					indices[index++] = baseIndex + stride2 + 1;
+					indices[index++] = baseIndex + 1;
+					needsTextureReplacement.set(baseIndex + 1, textureData);
+				} else if (needsFlip(row + 1, col) && (needsTextureReplacement.get(baseIndex + stride2) ?? textureData) === textureData) {
+					indices[index++] = baseIndex + 1;
+					indices[index++] = baseIndex
+					indices[index++] = baseIndex + stride2;
+					
+					indices[index++] = baseIndex + stride2 + 1;
+					indices[index++] = baseIndex + 1;
+					indices[index++] = baseIndex + stride2;
+					needsTextureReplacement.set(baseIndex + stride2, textureData);
+				} else {
+					// special
+					needsNewVert.set(baseIndex, textureData);
+				}
+			} else { // normal
+				
+				indices[index++] = baseIndex + stride2;
+				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex
+
+				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex + 1
+				indices[index++] = baseIndex;
+				
+			}
+		}
+	}
+
+	needsTextureReplacement.forEach((texture, baseIndex)=>{
+		//assert(flipped.has(baseIndex), `${Math.floor(baseIndex / stride2)} ${baseIndex % stride2}`);
+		textureBuffer[baseIndex] = texture;
+	});
+
+	const newVerts : number[] = [];
+	const newVertTextures : number[] = [];
+	let newVertIndex = result.numVertices;
+
+	while (needsNewVert.size > 0) {
+		needsNewVert.forEach((texture, baseIndex)=>{
+			const downLeftBaseIndex = baseIndex + stride2 - 1;
+			const upRightBaseIndex = baseIndex - stride2 + 1;
+			const downLeftTexShared = needsNewVert.get(downLeftBaseIndex) == texture;
+			const upRightTexShared = needsNewVert.get(upRightBaseIndex) == texture;
+			if (downLeftTexShared && upRightTexShared){
+				return;
+			}
+
+			if (downLeftTexShared){
+				newVerts.push(baseIndex + stride2);
+				indices[index++] = baseIndex + 1;
+				indices[index++] = baseIndex
+				//indices[index++] = baseIndex + stride2;
+				indices[index++] = newVertIndex;
+				
+				indices[index++] = baseIndex + stride2 + 1;
+				indices[index++] = baseIndex + 1;
+				//indices[index++] = baseIndex + stride2;
+				indices[index++] = newVertIndex;
+
+				// other vert
+				
+				indices[index++] = downLeftBaseIndex
+				indices[index++] = downLeftBaseIndex + stride2;
+				//indices[index++] = downLeftBaseIndex + 1;
+				indices[index++] = newVertIndex;
+				
+				indices[index++] = downLeftBaseIndex + stride2;
+				indices[index++] = downLeftBaseIndex + stride2 + 1;
+				//indices[index++] = downLeftBaseIndex + 1;
+				indices[index++] = newVertIndex;
+				needsNewVert.delete(downLeftBaseIndex);
+			} else {
+				newVerts.push(baseIndex + 1);
+
+				indices[index++] = baseIndex
+				indices[index++] = baseIndex + stride2;
+				//indices[index++] = baseIndex + 1;
+				indices[index++] = newVertIndex;
+				
+				indices[index++] = baseIndex + stride2;
+				indices[index++] = baseIndex + stride2 + 1;
+				//indices[index++] = baseIndex + 1;
+				indices[index++] = newVertIndex;
+
+				if (upRightTexShared) {
+					// other vert
+					indices[index++] = upRightBaseIndex + 1;
+					indices[index++] = upRightBaseIndex
+					//indices[index++] = baseIndex + stride2;
+					indices[index++] = newVertIndex;
+					
+					indices[index++] = upRightBaseIndex + stride2 + 1;
+					indices[index++] = upRightBaseIndex + 1;
+					//indices[index++] = baseIndex + stride2;
+					indices[index++] = newVertIndex;
+					needsNewVert.delete(upRightBaseIndex);
+				}
+			}
+			newVertIndex++;
+			newVertTextures.push(texture);
+			needsNewVert.delete(baseIndex);
+		});
+		break;
+	}
+
+
+	// add new verts
+	const oldNumVerts = result.numVertices;
+	result.numVertices += newVerts.length;
+	result.vertices = new Uint16Array(result.numVertices * 3);
+	result.normals = new Float32Array(result.numVertices * 3);
+	result.textureIds = new Uint16Array(result.numVertices);
+	for (let i = 0; i < oldNumVerts; ++i){
+		for (let j = i * 3; j < (i+1)*3; ++j){
+			result.vertices[j] = verts[j];
+			result.normals[j] = normals[j];
+		}
+		result.textureIds[i] = textureBuffer[i];
+	}
+	for (let i = 0; i < newVerts.length; ++i){
+		const newVertBaseIndex = newVerts[i];
+		const newVertTexture = newVertTextures[i];
+		for (let j = 0; j < 3; ++j){
+			result.vertices[oldNumVerts * 3 + i * 3 + j] = verts[newVertBaseIndex * 3 + j];
+			result.normals[oldNumVerts * 3 + i * 3 + j] = normals[newVertBaseIndex * 3 + j];
+		}
+		result.textureIds[oldNumVerts + i] = newVertTexture;
+	}
+
+
 	// todo: optimize mesh to get vertex indices back to a u16?
-	// todo: texture rotations
-	// todo: texture IDs for split quads
+	// todo: don't duplicate all the vertex arrays
+	// todo: move the new verts to be inline with the face's other verts instead of at the end
 
 	// debug: create heightmap textures
 	const heightmapTextures : Texture[] = [];
-
+/*
 	for (let i = 0; i < numHeightmapTiles; ++i){
 		const texture = new Texture();
 		texture.pixels = heightmapTiles.slice(i *32*32, (i+1)* 32*32);
@@ -991,6 +1197,7 @@ function parseTerrain(terrainBuffer : NamedArrayBufferSlice, tileset : Uint16Arr
 		texture.name = `Heightmap Tile ${i}`
 		heightmapTextures.push(texture);
 	}
+	*/
 
 	return [result, heightmapTextures];
 }
