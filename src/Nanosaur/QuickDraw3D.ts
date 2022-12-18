@@ -24,6 +24,8 @@ export type Qd3DMesh = {
 	// todo bounding box
 };
 
+export type Qd3DSkeleton = Qd3DMesh;
+
 export type Qd3DTexture = {
 	width : number;
 	height : number;
@@ -38,7 +40,8 @@ export type Qd3DTexture = {
 
 export type Qd3DObjectDef = {
 	x : number,
-	y : number,
+	y : number, // terrain height
+	z : number,
 	type : number,
 	param0 : number,
 	param1 : number,
@@ -515,12 +518,9 @@ export function parseTerrain(terrainBuffer : ArrayBufferSlice, pixelBuffer : Arr
 	// load objects
 	const numObjects = view.getUint32(objectListOffset);
 	const objects : Qd3DObjectDef[] = [];
-	let startCoordX = 0;
-	let startCoordY = 0;
-	let startCoordAim = 0;
 	for (let offset = objectListOffset + 4; offset < objectListOffset + 4 + 20 * numObjects; offset += 20){
 		const x = view.getUint16(offset);
-		const y = view.getUint16(offset + 2);
+		const z = view.getUint16(offset + 2);
 		const type = view.getUint16(offset + 4);
 		const param0 = view.getUint8(offset + 6);
 		const param1 = view.getUint8(offset + 7);
@@ -529,13 +529,10 @@ export function parseTerrain(terrainBuffer : ArrayBufferSlice, pixelBuffer : Arr
 		const flags = view.getUint16(offset + 10);
 		//const nextId = view.getUint16(offset + 12);
 		//const prevId = view.getUint16(offset + 16);
-		objects.push({x, y, type, param0, param1, param2, param3, flags});
 
-		if (type === 0){ // start position
-			startCoordX = x * MAP_TO_UNIT_VALUE; // map to world unit
-			startCoordY = y * MAP_TO_UNIT_VALUE; 
-			startCoordAim = param0;
-		}
+		// todo: get actual height
+		const y = getTerrainHeightAtRowCol(Math.floor(z / TERRAIN_POLYGON_SIZE), Math.floor(x / TERRAIN_POLYGON_SIZE));
+		objects.push({x : x * MAP_TO_UNIT_VALUE, y, z : z * MAP_TO_UNIT_VALUE, type, param0, param1, param2, param3, flags});
 	}
 
 	function getTerrainHeightAtRowCol(row : number, col : number) : number {
@@ -620,18 +617,9 @@ export function parseTerrain(terrainBuffer : ArrayBufferSlice, pixelBuffer : Arr
 	}
 	function needsFlip(row : number, col : number){
 		if (row === terrainDepth || col === terrainWidth)
-		return true;
+			return true;
 		return getSlope(row * stride2 + col) > 0;
 	}
-	function canFlip(row : number, col : number) : boolean{
-		if (row === terrainDepth || col === terrainWidth)
-			return true;
-		const baseIndex = row * stride2 + col;
-		const slope = getSlope(baseIndex);
-		if (slope !== 0) return slope > 0;
-		return canFlip(row + 1, col) || canFlip(row, col + 1);
-	}
-
 
 
 	const numTriangles = terrainWidth * terrainDepth * 2;

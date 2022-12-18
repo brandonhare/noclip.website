@@ -3,7 +3,7 @@ import * as Viewer from '../viewer';
 import * as UI from "../ui";
 
 import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode } from "../gfx/platform/GfxPlatform";
-import { GraphObjBase, SceneContext } from "../SceneBase";
+import { Destroyable, GraphObjBase, SceneContext } from "../SceneBase";
 import { GfxRenderHelper } from '../gfx/render/GfxRenderHelper';
 
 import { GridPlane } from "../InteractiveExamples/GridPlane";
@@ -16,15 +16,16 @@ import { Endianness } from "../endian";
 import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { mat4, vec3, vec4 } from "gl-matrix";
+import { mat4, ReadonlyMat4, vec3, vec4 } from "gl-matrix";
 import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, parseTerrain, Qd3DObjectDef } from "./QuickDraw3D";
+import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, parseTerrain, Qd3DObjectDef, Qd3DSkeleton } from "./QuickDraw3D";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
+import { MathConstants } from "../MathHelpers";
 
 const pathBase = "nanosaur_raw";
 
@@ -259,13 +260,13 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 
 }
 
-class StaticObject implements GraphObjBase {
+class StaticObject implements Destroyable {
 	gfxProgram : GfxProgram;
 	indexCount : number;
 	buffers : GfxBuffer[] = [];
 	inputLayout : GfxInputLayout;
 	inputState : GfxInputState;
-	modelMatrix = mat4.create();
+	modelMatrix? : mat4;
 	colour : GfxColor;
 	textureMapping : TextureMapping[] = [];
 
@@ -338,7 +339,7 @@ class StaticObject implements GraphObjBase {
 		};
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, instanceModelMatrix : ReadonlyMat4): void {
         const renderInst = renderInstManager.newRenderInst();
 		/*
         renderInst.setBindingLayouts([{
@@ -370,11 +371,15 @@ class StaticObject implements GraphObjBase {
 		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
+		let modelMatrix : ReadonlyMat4 = instanceModelMatrix;
+		if (this.modelMatrix){
+			modelMatrix = mat4.mul(mat4.create(), modelMatrix, this.modelMatrix); // todo verify multiplication order
+		}
 		//uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.projectionMatrix);
 		//const scratchMatrix = mat4.create();
 		//mat4.mul(scratchMatrix, viewerInput.camera.viewMatrix, this.modelMatrix);
 		//uniformOffset += fillMatrix4x4(uniformData, uniformOffset, scratchMatrix);
-		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, this.modelMatrix);
+		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, modelMatrix);
 
 		//const scratchMatrix = mat4.fromYRotation(mat4.create(), viewerInput.time / 2000);
 		//mat4.mul(scratchMatrix, this.modelMatrix, scratchMatrix);
@@ -390,38 +395,174 @@ class StaticObject implements GraphObjBase {
 	}
 }
 
+class Entity {
+	meshes : StaticObject[];
+	modelMatrix : mat4;
+
+	constructor(meshes : StaticObject | StaticObject[], matrix? : mat4){
+		if (!Array.isArray(meshes))
+			meshes = [meshes];
+		this.meshes = meshes;
+		if (matrix)
+			this.modelMatrix = matrix;
+		else
+			this.modelMatrix = mat4.create();
+	}
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+		for (const mesh of this.meshes)
+			mesh.prepareToRender(device, renderInstManager, viewerInput, this.modelMatrix);
+	}
+	
+}
+
+function transform(x : number, y : number, z : number, yAngle : number, scale : number) : mat4 {
+	let result = mat4.fromYRotation(mat4.create(), yAngle); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
+	mat4.scale(result, result, [scale,scale,scale]);
+	/*
+	const scaleMatrix = mat4.fromScaling(mat4.create(), [scale,scale,scale]);
+	const rotMatrix = ;
+	*/
+
+	result[12] = x;
+	result[13] = y;
+	result[14] = z;
+	return result;
+}
+
+const EntityCreationFunctions : ((def:Qd3DObjectDef, meshLists:StaticObject[][])=>Entity|Entity[]|void)[] = [
+	// 0: start coords (spawn player)
+	function(def){},
+	function spawnPowerup(def, meshLists){ // 1
+		// todo: global mesh lists
+		/*
+		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
+		const type = def.param0;
+		assert(type >= 0 && type <= 6, "powerup type out of range");
+		// todo: y pos quick
+		// todo: rotate
+		return new Entity(meshLists[meshIndices[type]], transform(def.x, def.y + 0.5, def.z, 0, 1));
+		*/
+	},
+	// 2: triceratops
+	function(def){},
+	// 3: rex
+	function(def){},
+	// 4: lava
+	function(def){},
+	function spawnEgg(def, meshLists){ // 5
+		const eggType = def.param0;
+		assert(eggType < 5, "egg type out of range");
+		const egg = new Entity(meshLists[3 + eggType], transform(def.x, def.y - 5, def.z, Math.random() * MathConstants.TAU, 0.6));
+		if (def.param3 & 1){
+			// make nest
+			const nest = new Entity(meshLists[15], transform(def.x, def.y, def.z, 0, 1));
+			return [egg, nest];
+		}
+		return egg;
+	},
+	// 6: gas vent
+	function(def){},
+	// 7: pteranodon
+	function(def){},
+	// 8: stegosaurus
+	function(def){},
+	// 9: time portal
+	function(def){},
+	function spawnTree(def, meshLists){ // 10
+		const treeScales = [
+			1,   // fern
+			1.1, // stickpalm
+			1.0, // bamboo
+			4.0, // cypress,
+			1.2, // main palm
+			1.3, // pine palm
+		] as const;
+		const treeIndex = def.param0;
+		assert(treeIndex >=0 && treeIndex <= 5, "tree type out of range");
+		// todo: adjust y by bounding box and scale
+		return new Entity(meshLists[16 + treeIndex], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, treeScales[treeIndex] + Math.random() * 0.5));
+	},
+	function spawnBoulder(def, meshLists){ // 11
+		// todo: adjust y by bounding box and scale
+		return new Entity(meshLists[8], transform(def.x, def.y - 10, def.z, Math.random() * MathConstants.TAU, 1 + Math.random()));
+	},
+	function spawnMushroom(def, meshLists){ //12
+		return new Entity(meshLists[10], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, 1 + Math.random()));
+	},
+	function spawnBush(def, meshLists){ // 13
+		// todo: adjust y by bounding box and scale
+		const bush = new Entity(meshLists[11], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, 4.2));
+		// todo: spawn triceratops
+		//const triceratops = spawnTriceratops(def, meshLists);
+		//return [bush, triceratops];
+		return bush;
+	},
+	// 14: water patch
+	function(def){},
+	// 15: crystal
+	function spawnCrystal(def, meshLists){
+		const crystalMeshIndices = [12, 13, 14];
+		const type = def.param0;
+		assert(type >= 0 && type <= 2, "crystal type out of range");
+		// todo: y coord quick
+		// todo: transparency/backfaces
+		return new Entity(meshLists[crystalMeshIndices[type]], transform(def.x, def.y, def.z, 0, 1.5 + Math.random()));
+	},
+	// 16: spitter
+	function(def){},
+	function spawnStepStone(def, meshLists){ // 17
+		// todo: quick y
+		const LAVA_Y_OFFSET = 50 / 2;
+		return new Entity(meshLists[23], transform(def.x, def.y + LAVA_Y_OFFSET, def.z, 0, 1));
+	},
+	function spawnRollingBoulder(def, meshLists){ // 18
+		const scale = 3;
+		// todo: roll
+		return new Entity(meshLists[9], transform(def.x, def.y + 30 * scale, def.z, Math.random() * MathConstants.TAU, scale));
+	},
+	function spawnSporePod(def, meshLists){ // 19
+		// todo: update method
+		return new Entity(meshLists[24], transform(def.x, def.y, def.z, 0, 0.5));
+	},
+];
+function invalidEntityType(def : Qd3DObjectDef) {
+	console.log("invalid object type", def);
+}
+
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
-    obj: GraphObjBase[] = [];
+	meshes : Destroyable[] = [];
+    entities: Entity[] = [];
 
 	textureHolder : UI.TextureListHolder;
 
 
-	constructor(device : GfxDevice, context : SceneContext, models : Qd3DMesh[][][], objects : Qd3DObjectDef[]){
+	constructor(device : GfxDevice, context : SceneContext, assets : Assets, objectList : Qd3DObjectDef[]){
 		const cache = new Cache(device);
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
-        this.obj.push(new GridPlane(device, cache));
 
-		const pos : vec3 = [1000,1000, 9000];
-		let first = true;
-		for (const modelGroup of models){
-			for (const meshGroup of modelGroup){
-				for (const mesh of meshGroup){
-					const obj = new StaticObject(device, cache, mesh);
-					if (first){ // terrain hack
-						first = false;
-					} else {
-						mat4.fromTranslation(obj.modelMatrix, pos);
-						mat4.scale(obj.modelMatrix, obj.modelMatrix, [-1,1,-1]);
-					}
-					this.obj.push(obj);
-				}
-			}
-			pos[0] += 200;
-			if (pos[0] >= 4000){
-				pos[0] = 1000;
-				pos[2] += 500;
+		const terrainMesh = new StaticObject(device, cache, assets.terrainModel);
+		this.meshes.push(terrainMesh);
+
+		const meshLists = assets.level1Models.map((list)=>
+			list.map((mesh)=>{
+				const object = new StaticObject(device, cache, mesh);
+				this.meshes.push(object);
+				return object;
+			})
+		);
+
+		const terrainEntity = new Entity(terrainMesh);
+		this.entities.push(terrainEntity);
+
+		for (const objectDef of objectList){
+			const entity = (EntityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, meshLists);
+			if (entity){
+				if (Array.isArray(entity))
+					this.entities.push(...entity);
+				else
+					this.entities.push(entity);
 			}
 		}
 	}
@@ -453,8 +594,8 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		//uniformOffset += fillVec4(uniformData, uniformOffset, 0.4, 0.36, 0.24, 1);
 
         const renderInstManager = this.renderHelper.renderInstManager;
-        for (let i = 0; i < this.obj.length; i++)
-            this.obj[i].prepareToRender(device, renderInstManager, viewerInput);
+        for (let i = 0; i < this.entities.length; i++)
+            this.entities[i].prepareToRender(device, renderInstManager, viewerInput);
         renderInstManager.popTemplateRenderInst();
         this.renderHelper.prepareToRender();
 	}
@@ -487,33 +628,72 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 	}
 
 	public destroy(device: GfxDevice) {
-		this.obj.forEach((obj)=>obj.destroy(device));
+		for (const mesh of this.meshes){
+			mesh.destroy(device);
+		}
 		this.renderHelper.getCache().destroy();
 		this.renderHelper.destroy();
 	}
 
 }
 
+const SkeletonNames = [
+	"Ptera", "Rex", "Stego", "Deinon", "Tricer", "Diloph",
+] as const;
+
+type SkeletonList = {
+	[String in typeof SkeletonNames[number]] : Qd3DMesh[][]
+}
+type Assets = {
+	terrainModel : Qd3DMesh,
+	level1Models : Qd3DMesh[][],
+	skeletons : SkeletonList,
+};
 
 class NanosaurSceneDesc implements Viewer.SceneDesc {
 	constructor(public id : string, public name : string){}
 
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 
-
-		const terrainDataPromise = context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter");
-		const terrainTexturePromise = context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt");
+		const terrainPromise = Promise.all([
+			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter"),
+			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
+		]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture));
 		
+		const level1ModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Level1_Models.3dmf")
+			.then(parseQd3DMeshGroup);
+
+		const skeletonPromises = SkeletonNames.map((name)=>
+			Promise.all([
+				context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.3dmf`).then(parseQd3DMeshGroup),
+				null,//context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.skeleton.rsrc`),
+			]).then(([modelData, skeletonData])=>modelData)
+		)
+
+		const [terrainModel, objectList] = await terrainPromise;
+
+		const skeletons : SkeletonList = {} as SkeletonList;
+		for (let i = 0; i < SkeletonNames.length; ++i){
+			skeletons[SkeletonNames[i]] = await skeletonPromises[i];
+		}
+
+		const assets : Assets = {
+			terrainModel,
+			level1Models : await level1ModelsPromise,
+			skeletons,
+		}
+
+		/*
 		const modelsPromise = Promise.all([
 				//"/Models/Global_Models.3dmf",
-				"/Models/Global_Models2.3dmf",
-				"/Models/HighScores.3dmf",
-				"/Models/Infobar_Models.3dmf",
+				//"/Models/Global_Models2.3dmf",
+				//"/Models/HighScores.3dmf",
+				//"/Models/Infobar_Models.3dmf",
 				"/Models/Level1_Models.3dmf",
-				"/Models/MenuInterface.3dmf",
-				"/Models/Title.3dmf",
+				//"/Models/MenuInterface.3dmf",
+				//"/Models/Title.3dmf",
 				"/Skeletons/Deinon.3dmf",
-				//"/Skeletons/Diloph.3dmf" // weird
+				"/Skeletons/Diloph.3dmf",
 				"/Skeletons/Ptera.3dmf",
 				"/Skeletons/Rex.3dmf",
 				"/Skeletons/Stego.3dmf",
@@ -522,14 +702,9 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 				context.dataFetcher.fetchData(pathBase + path)
 					.then(parseQd3DMeshGroup)
 			)
-		);
+		);*/
 
-		const [terrainModel, objects] = parseTerrain(await terrainDataPromise, await terrainTexturePromise);
-		const models = await modelsPromise;
-
-		models.unshift([[terrainModel]]);
-
-		return new NanosaurSceneRenderer(device, context, models, objects);
+		return new NanosaurSceneRenderer(device, context, assets, objectList);
 	}
 	
 }
