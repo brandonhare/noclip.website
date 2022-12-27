@@ -29,7 +29,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
 
-const pathBase = "nanosaur_raw";
+const pathBase = "nanosaur";
 
 class Program extends DeviceProgram {
 	static a_Position = 0;
@@ -203,12 +203,13 @@ void main(){
 
 
 class Cache extends GfxRenderCache implements UI.TextureListHolder {
+	textures = new WeakMap<Qd3DTexture, GfxTexture>();
 
-	textures = new Map<Qd3DTexture, GfxTexture>();
+	assets : ProcessedAssets;
+	allTextures : GfxTexture[] = [];
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
-
 
 	createTexture(texture : Qd3DTexture){
 		let result = this.textures.get(texture);
@@ -223,6 +224,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 				numLevels : 1
 			});
 			this.textures.set(texture, result);
+			this.allTextures.push(result);
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
 			if (texture.numTextures == 1){
@@ -255,8 +257,51 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		return mapping;
 	}
 
+	createModels(rawAssets : RawAssets){
+		const cache = this;
+		const device = this.device;
+
+		function make(meshes : Qd3DMesh[][]) : StaticObject[][]{
+			return meshes.map((list)=>
+				list.map((mesh)=>
+					new StaticObject(device, cache, mesh)
+				)
+			);
+		}
+		
+		const skeletons : any = {};
+		for (const name of SkeletonNames){
+			skeletons[name] = make(rawAssets.skeletons[name]);
+		}
+
+		this.assets = {
+			globalModels : make(rawAssets.globalModels),
+			level1Models : make(rawAssets.level1Models),
+			terrainModel : new StaticObject(device, this, rawAssets.terrainModel),
+			skeletons,
+		}
+	}
+	destroyModels(){
+		const device = this.device;
+		function destroyModels(models : StaticObject[][]){
+			for (const list of models)
+				for (const model of list)
+					model.destroy(device);
+		}
+		destroyModels(this.assets.globalModels);
+		destroyModels(this.assets.level1Models);
+		for (const name of SkeletonNames){
+			destroyModels(this.assets.skeletons[name]);
+		}
+		this.assets.terrainModel.destroy(device);
+	}
+
 	public override destroy(): void {
-		this.textures.forEach((tex)=>this.device.destroyTexture(tex));
+		const device = this.device;
+
+		this.allTextures.forEach((tex)=>device.destroyTexture(tex));
+		this.destroyModels();
+
 		super.destroy();
 	}
 
@@ -279,7 +324,7 @@ class StaticObject implements Destroyable {
 		this.colour = mesh.colour;
 		if (mesh.baseTransform)
 			this.modelMatrix = mat4.clone(mesh.baseTransform);
-	
+
 		const vertexBufferDescriptors : GfxVertexBufferDescriptor[] = [];
 		const vertexLayoutDescriptors : GfxInputLayoutBufferDescriptor[] = [];
 		const vertexAttributeDescriptors : GfxVertexAttributeDescriptor[] = [];
@@ -416,8 +461,14 @@ class Entity {
 		if (rotation === null)
 			rotation = Math.random() * MathConstants.TAU;
 
-		if (pushUp)
-			position[1] -= meshes[0].aabb.minY * scale;
+		if (pushUp){
+			let lowestY = Infinity;
+			for (const mesh of meshes){
+				const y = mesh.aabb.minY;
+				if (y < lowestY) lowestY = y;
+			}
+			position[1] -= lowestY * scale;
+		}
 
 		this.position = position;
 		this.rotation = rotation;
@@ -446,46 +497,69 @@ class Entity {
 	
 }
 
-const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][])=>Entity|Entity[]|void)[] = [
-	// 0: start coords (spawn player)
-	function(def){},
-	function spawnPowerup(def, meshLists){ // 1
-		// todo: global mesh lists
-		/*
+function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
+	// todo: animate, mesh, push up?
+	return new Entity(assets.skeletons.Tricer.flat(), [def.x, def.y, def.z], null, 2.2, false);
+};
+const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
+	function spawnPlayer(def, assets){ // 0
+		// todo animate, shadow
+		return new Entity(assets.skeletons.Deinon.flat(), [def.x, def.y, def.z], 0, 1, true);
+	},
+	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
 		const type = def.param0;
 		assert(type >= 0 && type <= 6, "powerup type out of range");
 		// todo: y pos quick
 		// todo: rotate
-		return new Entity(meshLists[meshIndices[type]], transform(def.x, def.y + 0.5, def.z, 0, 1));
-		*/
+		return new Entity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], 0, 1, false);
 	},
-	// 2: triceratops
-	function(def){},
-	// 3: rex
-	function(def){},
-	// 4: lava
-	function(def){},
-	function spawnEgg(def, meshLists){ // 5
+	spawnTriceratops, // 2
+	function spawnRex(def, assets){ // 3
+		// todo: animate, mesh, push up, rotation, shadow (ffor eveerything)
+		return new Entity(assets.skeletons.Rex.flat(), [def.x, def.y, def.z], null, 1.2, true);
+	},
+	function spawnLava(def, assets){ // 4
+		// todo: translucency, fireballs, undulation, auto y, etc
+		const x = Math.floor(def.x / 140) * 140 + 140/2
+		const z = Math.floor(def.z / 140) * 140 + 140/2
+		const y = (def.param3 & 1) ? def.y + 50 : 305;
+		const scale = (def.param3 & (1<<2)) ? 1 : 2;
+		return new Entity(assets.level1Models[1], [x,y,z], 0, scale, false);
+	},
+	function spawnEgg(def, assets){ // 5
 		const eggType = def.param0;
 		assert(eggType < 5, "egg type out of range");
-		const egg = new Entity(meshLists[3 + eggType], [def.x, def.y - 5, def.z], null, 0.6, true);
+		const egg = new Entity(assets.level1Models[3 + eggType], [def.x, def.y - 5, def.z], null, 0.6, true);
 		if (def.param3 & 1){
 			// make nest
-			const nest = new Entity(meshLists[15], [def.x, def.y, def.z], 0, 1, false);
+			const nest = new Entity(assets.level1Models[15], [def.x, def.y, def.z], 0, 1, false);
 			return [egg, nest];
 		}
 		return egg;
 	},
-	// 6: gas vent
-	function(def){},
-	// 7: pteranodon
-	function(def){},
-	// 8: stegosaurus
-	function(def){},
-	// 9: time portal
-	function(def){},
-	function spawnTree(def, meshLists){ // 10
+	function spawnGasVent(def, assets){ // 6
+		// todo: translucency? billboard
+		return new Entity(assets.level1Models[22], [def.x, def.y, def.z], 0, 0.5, false);
+	},
+	function spawnPteranodon(def, assets){ // 7
+		// todo fly and stuff
+		const ptera = new Entity(assets.skeletons.Ptera.flat(), [def.x, def.y + 100, def.z], null, 1, true)
+		if (def.param3 & (1<<1)) {
+			// todo attach
+			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
+			return [rock, ptera];
+		}
+		return ptera;
+	},
+	function spawnStegosaurus(def, assets){ // 8
+		return new Entity(assets.skeletons.Stego.flat(), [def.x, def.y, def.z], null, 1.4, true);
+	},
+	function spawnTimePortal(def, assets){ // 9
+		// todo: everything
+		return new Entity(assets.globalModels[10], [def.x, def.y + 50, def.z], 0, 5, false);
+	},
+	function spawnTree(def, assets){ // 10
 		const treeScales = [
 			1,   // fern
 			1.1, // stickpalm
@@ -496,82 +570,78 @@ const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][]
 		] as const;
 		const treeIndex = def.param0;
 		assert(treeIndex >=0 && treeIndex <= 5, "tree type out of range");
-		return new Entity(meshLists[16 + treeIndex], [def.x, def.y, def.z], null, treeScales[treeIndex] + Math.random() * 0.5, true);
+		return new Entity(assets.level1Models[16 + treeIndex], [def.x, def.y, def.z], null, treeScales[treeIndex] + Math.random() * 0.5, true);
 	},
-	function spawnBoulder(def, meshLists){ // 11
-		return new Entity(meshLists[8], [def.x, def.y - 10, def.z], null, 1 + Math.random(), true);
+	function spawnBoulder(def, assets){ // 11
+		return new Entity(assets.level1Models[8], [def.x, def.y - 10, def.z], null, 1 + Math.random(), true);
 	},
-	function spawnMushroom(def, meshLists){ //12
-		return new Entity(meshLists[10], [def.x, def.y, def.z], null, 1 + Math.random(), false);
+	function spawnMushroom(def, assets){ //12
+		return new Entity(assets.level1Models[10], [def.x, def.y, def.z], null, 1 + Math.random(), false);
 	},
-	function spawnBush(def, meshLists){ // 13
-		const bush = new Entity(meshLists[11], [def.x, def.y, def.z], null, 4.2, true);
-		// todo: spawn triceratops
-		//const triceratops = spawnTriceratops(def, meshLists);
-		//return [bush, triceratops];
+	function spawnBush(def, assets){ // 13
+		const bush = new Entity(assets.level1Models[11], [def.x, def.y, def.z], null, 4.2, true);
+		if (def.param3 & 1){
+			const triceratops = spawnTriceratops(def, assets);
+			return [bush, triceratops];
+		}
 		return bush;
 	},
-	// 14: water patch
-	function(def){},
-	// 15: crystal
-	function spawnCrystal(def, meshLists){
+	function spawnWater(def, assets){ // 14
+		// todo translucency and stuff
+		const x = Math.floor(def.x / 140) * 140 + 140/2
+		const z = Math.floor(def.z / 140) * 140 + 140/2
+		const y = (def.param3 & 1) ? def.y + 50 : 210;
+		return new Entity(assets.level1Models[2], [x,y,z], 0, 2, false);
+	},
+	function spawnCrystal(def, assets){ // 15
 		const crystalMeshIndices = [12, 13, 14];
 		const type = def.param0;
 		assert(type >= 0 && type <= 2, "crystal type out of range");
 		// todo: y coord quick
 		// todo: transparency/backfaces
-		return new Entity(meshLists[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
+		return new Entity(assets.level1Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
 	},
-	// 16: spitter
-	function(def){},
-	function spawnStepStone(def, meshLists){ // 17
+	function spawnSpitter(def, assets){ // 16
+		return new Entity(assets.skeletons.Diloph.flat(), [def.x, def.y, def.z], null, 0.8, true);
+	},
+	function spawnStepStone(def, assets){ // 17
 		// todo: quick y
 		const LAVA_Y_OFFSET = 50 / 2;
-		return new Entity(meshLists[23], [def.x, def.y + LAVA_Y_OFFSET, def.z], 0, 1, false);
+		return new Entity(assets.level1Models[23], [def.x, def.y + LAVA_Y_OFFSET, def.z], 0, 1, false);
 	},
-	function spawnRollingBoulder(def, meshLists){ // 18
+	function spawnRollingBoulder(def, assets){ // 18
 		const scale = 3;
 		// todo: roll
-		return new Entity(meshLists[9], [def.x, def.y + 30 * scale, def.z], null, scale, false);
+		return new Entity(assets.level1Models[9], [def.x, def.y + 30 * scale, def.z], null, scale, false);
 	},
-	function spawnSporePod(def, meshLists){ // 19
+	function spawnSporePod(def, assets){ // 19
 		// todo: update method
-		return new Entity(meshLists[24], [def.x, def.y, def.z], 0, 0.5, false);
+		return new Entity(assets.level1Models[24], [def.x, def.y, def.z], 0, 0.5, false);
 	},
 ];
-function invalidEntityType(def : LevelObjectDef) {
+function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 	console.log("invalid object type", def);
 }
 
+type ProcessedAssets = Assets<StaticObject, StaticObject>;
+
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
-	meshes : Destroyable[] = [];
     entities: Entity[] = [];
 
 	textureHolder : UI.TextureListHolder;
 
 
-	constructor(device : GfxDevice, context : SceneContext, assets : Assets, objectList : LevelObjectDef[]){
-		const cache = new Cache(device);
+	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[]){
+		const cache = new Cache(device)
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
 
-		const terrainMesh = new StaticObject(device, cache, assets.terrainModel);
-		this.meshes.push(terrainMesh);
+		cache.createModels(assets);
 
-		const meshLists = assets.level1Models.map((list)=>
-			list.map((mesh)=>{
-				const object = new StaticObject(device, cache, mesh);
-				this.meshes.push(object);
-				return object;
-			})
-		);
-
-		const terrainEntity = new Entity(terrainMesh, [0,0,0], 0, 1, false);
-		this.entities.push(terrainEntity);
-
+		this.entities.push(new Entity(cache.assets.terrainModel, [0,0,0],0,1,false));
 		for (const objectDef of objectList){
-			const entity = (EntityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, meshLists);
+			const entity = (EntityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, cache.assets);
 			if (entity){
 				if (Array.isArray(entity))
 					this.entities.push(...entity);
@@ -642,9 +712,6 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 	}
 
 	public destroy(device: GfxDevice) {
-		for (const mesh of this.meshes){
-			mesh.destroy(device);
-		}
 		this.renderHelper.getCache().destroy();
 		this.renderHelper.destroy();
 	}
@@ -655,25 +722,29 @@ const SkeletonNames = [
 	"Ptera", "Rex", "Stego", "Deinon", "Tricer", "Diloph",
 ] as const;
 
-type SkeletonList = {
-	[String in typeof SkeletonNames[number]] : Qd3DMesh[][]
-}
-type Assets = {
-	terrainModel : Qd3DMesh,
-	level1Models : Qd3DMesh[][],
-	skeletons : SkeletonList,
+type Assets<MeshType, SkeletonType> = {
+	globalModels : MeshType[][],
+	level1Models : MeshType[][],
+	terrainModel : MeshType,
+	skeletons : {
+		[String in typeof SkeletonNames[number]] : SkeletonType[][]
+	}
 };
+type RawAssets = Assets<Qd3DMesh, Qd3DSkeleton>;
 
 class NanosaurSceneDesc implements Viewer.SceneDesc {
-	constructor(public id : string, public name : string){}
+	constructor(public id : string, public name : string, public levelName : string){}
 
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
 
 		const terrainPromise = Promise.all([
-			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.ter"),
+			context.dataFetcher.fetchData(`${pathBase}/terrain/${this.levelName}.ter`),
 			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
 		]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture));
 		
+		const globalModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Global_Models.3dmf")
+			.then(parseQd3DMeshGroup);
+
 		const level1ModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Level1_Models.3dmf")
 			.then(parseQd3DMeshGroup);
 
@@ -686,37 +757,17 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 		const [terrainModel, objectList] = await terrainPromise;
 
-		const skeletons : SkeletonList = {} as SkeletonList;
+		const skeletons : any = {};
 		for (let i = 0; i < SkeletonNames.length; ++i){
 			skeletons[SkeletonNames[i]] = await skeletonPromises[i];
 		}
 
-		const assets : Assets = {
-			terrainModel,
+		const assets : RawAssets = {
+			globalModels : await globalModelsPromise,
 			level1Models : await level1ModelsPromise,
+			terrainModel,
 			skeletons,
 		}
-
-		/*
-		const modelsPromise = Promise.all([
-				//"/Models/Global_Models.3dmf",
-				//"/Models/Global_Models2.3dmf",
-				//"/Models/HighScores.3dmf",
-				//"/Models/Infobar_Models.3dmf",
-				"/Models/Level1_Models.3dmf",
-				//"/Models/MenuInterface.3dmf",
-				//"/Models/Title.3dmf",
-				"/Skeletons/Deinon.3dmf",
-				"/Skeletons/Diloph.3dmf",
-				"/Skeletons/Ptera.3dmf",
-				"/Skeletons/Rex.3dmf",
-				"/Skeletons/Stego.3dmf",
-				"/Skeletons/Tricer.3dmf",
-			].map((path)=>
-				context.dataFetcher.fetchData(pathBase + path)
-					.then(parseQd3DMeshGroup)
-			)
-		);*/
 
 		return new NanosaurSceneRenderer(device, context, assets, objectList);
 	}
@@ -726,7 +777,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 const id = "nanosaur";
 const name = "Nanosaur";
 const sceneDescs = [
-	new NanosaurSceneDesc("level1", "Level 1"),
+	new NanosaurSceneDesc("level1", "Level 1", "Level1"),
+	new NanosaurSceneDesc("level1Extreme", "Level 1 (Extreme)", "Level1Pro"),
 ];
 
 
