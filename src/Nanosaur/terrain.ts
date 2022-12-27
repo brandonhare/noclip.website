@@ -76,26 +76,6 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	const heightmapTiles = terrainBuffer.createTypedArray(Uint8Array, heightmapTilesOffset, numHeightmapTiles * 32 * 32);
 
 
-
-	// load objects
-	const numObjects = view.getUint32(objectListOffset);
-	const objects: LevelObjectDef[] = [];
-	for (let offset = objectListOffset + 4; offset < objectListOffset + 4 + 20 * numObjects; offset += 20) {
-		const x = view.getUint16(offset);
-		const z = view.getUint16(offset + 2);
-		const type = view.getUint16(offset + 4);
-		const param0 = view.getUint8(offset + 6);
-		const param1 = view.getUint8(offset + 7);
-		const param2 = view.getUint8(offset + 8);
-		const param3 = view.getUint8(offset + 9);
-		const flags = view.getUint16(offset + 10);
-		//const nextId = view.getUint16(offset + 12);
-		//const prevId = view.getUint16(offset + 16);
-		// todo: get actual height
-		const y = getTerrainHeightAtRowCol(Math.floor(z / TERRAIN_POLYGON_SIZE), Math.floor(x / TERRAIN_POLYGON_SIZE));
-		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, param1, param2, param3, flags });
-	}
-
 	function getTerrainHeightAtRowCol(row: number, col: number): number {
 		if (row < 0 || col < 0 || row >= terrainDepth || col >= terrainWidth)
 			return 0;
@@ -182,6 +162,64 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		if (row === terrainDepth || col === terrainWidth)
 			return true;
 		return getSlope(row * stride2 + col) > 0;
+	}
+
+	function getExactHeight(x : number, z : number): number {
+		const row = Math.floor(z);
+		const col = Math.floor(x);
+		x %= 1;
+		z %= 1;
+		const baseIndex = row * stride2 + col;
+		
+		// (col, row)
+		let h1 = vertices[baseIndex * 3 + 1];
+		// (col+1, row)
+		let h2 = vertices[(baseIndex + 1) * 3 + 1];
+		// (col+1, row+1)
+		let h3 = vertices[(baseIndex + stride2 + 1) * 3 + 1];
+		// (col, row+1)
+		let h4 = vertices[(baseIndex + stride2) * 3 + 1];
+
+		const needsFlip = Math.abs(h1 - h3) - Math.abs(h2 - h4) > 0;
+		if (!needsFlip){
+			x = 1 - x;
+			let temp = h1;
+			h1 = h2;
+			h2 = temp;
+			temp = h4;
+			h4 = h3;
+			h3 = temp;
+		}
+
+		if (x + z > 1){
+			// reflect
+			h1 = h3;
+			let temp = x;
+			x = 1 - z;
+			z = 1 - temp;
+		}
+
+		// barycentric between h1,h2,h4
+		return h1 * (1 - x - z) + h2 * x + h4 * z;
+	}
+
+
+	// load objects
+	const numObjects = view.getUint32(objectListOffset);
+	const objects: LevelObjectDef[] = [];
+	for (let offset = objectListOffset + 4; offset < objectListOffset + 4 + 20 * numObjects; offset += 20) {
+		const x = view.getUint16(offset);
+		const z = view.getUint16(offset + 2);
+		const type = view.getUint16(offset + 4);
+		const param0 = view.getUint8(offset + 6);
+		const param1 = view.getUint8(offset + 7);
+		const param2 = view.getUint8(offset + 8);
+		const param3 = view.getUint8(offset + 9);
+		const flags = view.getUint16(offset + 10);
+		//const nextId = view.getUint16(offset + 12);
+		//const prevId = view.getUint16(offset + 16);
+		const y = getExactHeight(x / OREOMAP_TILE_SIZE, z / OREOMAP_TILE_SIZE) * HEIGHT_SCALE;
+		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, param1, param2, param3, flags });
 	}
 
 

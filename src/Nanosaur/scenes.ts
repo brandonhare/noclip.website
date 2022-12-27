@@ -401,23 +401,38 @@ class StaticObject implements Destroyable {
 
 class Entity {
 	meshes : StaticObject[];
+	position: vec3;
+	rotation: number;
+	scale: number;
 	modelMatrix : mat4;
 	aabb : AABB = new AABB();
 
-	constructor(meshes : StaticObject | StaticObject[], matrix? : mat4){
+	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
 		if (!Array.isArray(meshes))
 			meshes = [meshes];
 		this.meshes = meshes;
-		if (matrix)
-			this.modelMatrix = matrix;
-		else
-			this.modelMatrix = mat4.create();
-		
+
+
+		if (rotation === null)
+			rotation = Math.random() * MathConstants.TAU;
+
+		if (pushUp)
+			position[1] -= meshes[0].aabb.minY * scale;
+
+		this.position = position;
+		this.rotation = rotation;
+		this.scale = scale;
+
+		this.modelMatrix = mat4.fromYRotation(mat4.create(), rotation); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
+		mat4.scale(this.modelMatrix, this.modelMatrix, [scale,scale,scale]);
+		this.modelMatrix[12] = position[0];
+		this.modelMatrix[13] = position[1];
+		this.modelMatrix[14] = position[2];
+
 		for (const mesh of meshes){
 			this.aabb.union(this.aabb, mesh.aabb);
 		}
 		this.aabb.transform(this.aabb, this.modelMatrix);
-
 	}
 	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
 
@@ -429,20 +444,6 @@ class Entity {
 			mesh.prepareToRender(device, renderInstManager, viewerInput, this.modelMatrix);
 	}
 	
-}
-
-function transform(x : number, y : number, z : number, yAngle : number, scale : number) : mat4 {
-	let result = mat4.fromYRotation(mat4.create(), yAngle); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
-	mat4.scale(result, result, [scale,scale,scale]);
-	/*
-	const scaleMatrix = mat4.fromScaling(mat4.create(), [scale,scale,scale]);
-	const rotMatrix = ;
-	*/
-
-	result[12] = x;
-	result[13] = y;
-	result[14] = z;
-	return result;
 }
 
 const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][])=>Entity|Entity[]|void)[] = [
@@ -468,10 +469,10 @@ const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][]
 	function spawnEgg(def, meshLists){ // 5
 		const eggType = def.param0;
 		assert(eggType < 5, "egg type out of range");
-		const egg = new Entity(meshLists[3 + eggType], transform(def.x, def.y - 5, def.z, Math.random() * MathConstants.TAU, 0.6));
+		const egg = new Entity(meshLists[3 + eggType], [def.x, def.y - 5, def.z], null, 0.6, true);
 		if (def.param3 & 1){
 			// make nest
-			const nest = new Entity(meshLists[15], transform(def.x, def.y, def.z, 0, 1));
+			const nest = new Entity(meshLists[15], [def.x, def.y, def.z], 0, 1, false);
 			return [egg, nest];
 		}
 		return egg;
@@ -495,19 +496,16 @@ const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][]
 		] as const;
 		const treeIndex = def.param0;
 		assert(treeIndex >=0 && treeIndex <= 5, "tree type out of range");
-		// todo: adjust y by bounding box and scale
-		return new Entity(meshLists[16 + treeIndex], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, treeScales[treeIndex] + Math.random() * 0.5));
+		return new Entity(meshLists[16 + treeIndex], [def.x, def.y, def.z], null, treeScales[treeIndex] + Math.random() * 0.5, true);
 	},
 	function spawnBoulder(def, meshLists){ // 11
-		// todo: adjust y by bounding box and scale
-		return new Entity(meshLists[8], transform(def.x, def.y - 10, def.z, Math.random() * MathConstants.TAU, 1 + Math.random()));
+		return new Entity(meshLists[8], [def.x, def.y - 10, def.z], null, 1 + Math.random(), true);
 	},
 	function spawnMushroom(def, meshLists){ //12
-		return new Entity(meshLists[10], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, 1 + Math.random()));
+		return new Entity(meshLists[10], [def.x, def.y, def.z], null, 1 + Math.random(), false);
 	},
 	function spawnBush(def, meshLists){ // 13
-		// todo: adjust y by bounding box and scale
-		const bush = new Entity(meshLists[11], transform(def.x, def.y, def.z, Math.random() * MathConstants.TAU, 4.2));
+		const bush = new Entity(meshLists[11], [def.x, def.y, def.z], null, 4.2, true);
 		// todo: spawn triceratops
 		//const triceratops = spawnTriceratops(def, meshLists);
 		//return [bush, triceratops];
@@ -522,23 +520,23 @@ const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][]
 		assert(type >= 0 && type <= 2, "crystal type out of range");
 		// todo: y coord quick
 		// todo: transparency/backfaces
-		return new Entity(meshLists[crystalMeshIndices[type]], transform(def.x, def.y, def.z, 0, 1.5 + Math.random()));
+		return new Entity(meshLists[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
 	},
 	// 16: spitter
 	function(def){},
 	function spawnStepStone(def, meshLists){ // 17
 		// todo: quick y
 		const LAVA_Y_OFFSET = 50 / 2;
-		return new Entity(meshLists[23], transform(def.x, def.y + LAVA_Y_OFFSET, def.z, 0, 1));
+		return new Entity(meshLists[23], [def.x, def.y + LAVA_Y_OFFSET, def.z], 0, 1, false);
 	},
 	function spawnRollingBoulder(def, meshLists){ // 18
 		const scale = 3;
 		// todo: roll
-		return new Entity(meshLists[9], transform(def.x, def.y + 30 * scale, def.z, Math.random() * MathConstants.TAU, scale));
+		return new Entity(meshLists[9], [def.x, def.y + 30 * scale, def.z], null, scale, false);
 	},
 	function spawnSporePod(def, meshLists){ // 19
 		// todo: update method
-		return new Entity(meshLists[24], transform(def.x, def.y, def.z, 0, 0.5));
+		return new Entity(meshLists[24], [def.x, def.y, def.z], 0, 0.5, false);
 	},
 ];
 function invalidEntityType(def : LevelObjectDef) {
@@ -569,7 +567,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 			})
 		);
 
-		const terrainEntity = new Entity(terrainMesh);
+		const terrainEntity = new Entity(terrainMesh, [0,0,0], 0, 1, false);
 		this.entities.push(terrainEntity);
 
 		for (const objectDef of objectList){
