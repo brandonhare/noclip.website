@@ -1,6 +1,7 @@
 import { mat4, vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
+import { AABB } from "../Geometry";
 import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { assert } from "../util";
@@ -124,6 +125,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		return row * stride + col * 3;
 	}
 
+	let maxHeight = 0;
 	for (let row = 0; row <= terrainDepth; row++) {
 		const z = row; //* TERRAIN_POLYGON_SIZE;
 		for (let col = 0; col <= terrainWidth; ++col) {
@@ -133,6 +135,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 			vertices[index++] = x;
 			vertices[index++] = y;
 			vertices[index++] = z;
+			if (y > maxHeight) maxHeight = y;
 		}
 	}
 
@@ -382,9 +385,10 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	const result: Qd3DMesh = {
 		numTriangles,
 		numVertices,
+		aabb : new AABB(0, 0, 0, terrainWidth * TERRAIN_POLYGON_SIZE, maxHeight * HEIGHT_SCALE, terrainDepth * TERRAIN_POLYGON_SIZE),
 		colour: { r: 1, g: 1, b: 1, a: 1 },
-		baseTransform: mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, HEIGHT_SCALE, TERRAIN_POLYGON_SIZE]),
 		texture,
+		baseTransform: mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, HEIGHT_SCALE, TERRAIN_POLYGON_SIZE]),
 		indices,
 		vertices: newVertices,
 		normals: newNormals,

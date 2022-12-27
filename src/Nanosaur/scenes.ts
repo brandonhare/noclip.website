@@ -27,6 +27,7 @@ import { parseTerrain, LevelObjectDef } from "./terrain";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
+import { AABB } from "../Geometry";
 
 const pathBase = "nanosaur_raw";
 
@@ -268,11 +269,13 @@ class StaticObject implements Destroyable {
 	inputLayout : GfxInputLayout;
 	inputState : GfxInputState;
 	modelMatrix? : mat4;
+	aabb : AABB;
 	colour : GfxColor;
 	textureMapping : TextureMapping[] = [];
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh){
 		this.indexCount = mesh.numTriangles * 3;
+		this.aabb = mesh.aabb;
 		this.colour = mesh.colour;
 		if (mesh.baseTransform)
 			this.modelMatrix = mat4.clone(mesh.baseTransform);
@@ -399,6 +402,7 @@ class StaticObject implements Destroyable {
 class Entity {
 	meshes : StaticObject[];
 	modelMatrix : mat4;
+	aabb : AABB = new AABB();
 
 	constructor(meshes : StaticObject | StaticObject[], matrix? : mat4){
 		if (!Array.isArray(meshes))
@@ -408,8 +412,19 @@ class Entity {
 			this.modelMatrix = matrix;
 		else
 			this.modelMatrix = mat4.create();
+		
+		for (const mesh of meshes){
+			this.aabb.union(this.aabb, mesh.aabb);
+		}
+		this.aabb.transform(this.aabb, this.modelMatrix);
+
 	}
 	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+
+		if (!viewerInput.camera.frustum.contains(this.aabb)){
+			return;
+		}
+		
 		for (const mesh of this.meshes)
 			mesh.prepareToRender(device, renderInstManager, viewerInput, this.modelMatrix);
 	}

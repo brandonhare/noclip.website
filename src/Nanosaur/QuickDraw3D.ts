@@ -3,6 +3,7 @@
 import { mat3, mat4, ReadonlyMat4, vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
+import { AABB } from "../Geometry";
 import { GfxColor, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { assert, readString } from "../util";
@@ -10,6 +11,7 @@ import { assert, readString } from "../util";
 export type Qd3DMesh = {
 	numTriangles : number;
 	numVertices : number;
+	aabb : AABB, // basetransform is already taken into account
 	colour : GfxColor;
 	texture? : Qd3DTexture;
 	baseTransform? : ReadonlyMat4;
@@ -195,17 +197,26 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 				const vertices = buffer.createTypedArray(Float32Array, offset, numVertices * 3, Endianness.BIG_ENDIAN);
 				offset += numVertices * 12;
 
+				const aabb = new AABB(
+					data.getFloat32(offset + 0), // xmin
+					data.getFloat32(offset + 4), // ymin
+					data.getFloat32(offset + 8), // zmin
+					data.getFloat32(offset + 12), // xmax
+					data.getFloat32(offset + 16), // ymax
+					data.getFloat32(offset + 20), // zmax
+				);
+				//const empty = data.getUint32(offset + 24);
+				offset += 7*4;
+
 				currentMesh = {
-					vertices,
 					numTriangles,
 					numVertices,
+					aabb,
+					colour: {r:1, g:1, b:1, a:1},
 					indices,
-					colour: {r:1, g:1, b:1, a:1}
+					vertices,
 				};
 				meshGroups[meshGroups.length - 1].push(currentMesh);
-
-				// todo bounding box
-				offset += 7*4;
 
 				break;
 			}
