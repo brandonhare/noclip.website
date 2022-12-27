@@ -22,7 +22,8 @@ import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorH
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, parseTerrain, Qd3DObjectDef, Qd3DSkeleton } from "./QuickDraw3D";
+import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, Qd3DSkeleton } from "./QuickDraw3D";
+import { parseTerrain, LevelObjectDef } from "./terrain";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
@@ -429,7 +430,7 @@ function transform(x : number, y : number, z : number, yAngle : number, scale : 
 	return result;
 }
 
-const EntityCreationFunctions : ((def:Qd3DObjectDef, meshLists:StaticObject[][])=>Entity|Entity[]|void)[] = [
+const EntityCreationFunctions : ((def:LevelObjectDef, meshLists:StaticObject[][])=>Entity|Entity[]|void)[] = [
 	// 0: start coords (spawn player)
 	function(def){},
 	function spawnPowerup(def, meshLists){ // 1
@@ -525,7 +526,7 @@ const EntityCreationFunctions : ((def:Qd3DObjectDef, meshLists:StaticObject[][])
 		return new Entity(meshLists[24], transform(def.x, def.y, def.z, 0, 0.5));
 	},
 ];
-function invalidEntityType(def : Qd3DObjectDef) {
+function invalidEntityType(def : LevelObjectDef) {
 	console.log("invalid object type", def);
 }
 
@@ -537,7 +538,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 	textureHolder : UI.TextureListHolder;
 
 
-	constructor(device : GfxDevice, context : SceneContext, assets : Assets, objectList : Qd3DObjectDef[]){
+	constructor(device : GfxDevice, context : SceneContext, assets : Assets, objectList : LevelObjectDef[]){
 		const cache = new Cache(device);
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
