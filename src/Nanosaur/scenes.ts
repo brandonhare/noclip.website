@@ -16,7 +16,7 @@ import { Endianness } from "../endian";
 import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { mat4, ReadonlyMat4, vec3, vec4 } from "gl-matrix";
+import { mat4, ReadonlyMat4, vec2, vec3, vec4 } from "gl-matrix";
 import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { TextureMapping } from "../TextureHolder";
@@ -28,6 +28,7 @@ import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
+import { CullMode } from "../gx/gx_enum";
 
 const pathBase = "nanosaur";
 
@@ -49,6 +50,7 @@ class Program extends DeviceProgram {
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
 		this.setDefineBool("TEXTURE_HAS_ALPHA", (flags & RenderFlags.TextureHasAlpha) !== 0);
 		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
+		this.setDefineBool("SCROLL_UVS", (flags & RenderFlags.ScrollUVs) !== 0);
 	}
 
 	/*
@@ -82,6 +84,9 @@ layout(std140) uniform ub_SceneParams {
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
 	vec4 u_Colour;
+	#ifdef SCROLL_UVS
+	vec2 u_UVScroll;
+	#endif
 };
 `;
 	override vert = 
@@ -132,7 +137,11 @@ void main(){
 	#ifdef HAS_TEXTURE
 
 		#ifndef TILEMAP
-			colour *= texture(SAMPLER_2D(u_Texture), v_UV);
+			vec2 uv = v_UV;
+			#ifdef SCROLL_UVS
+				uv += u_UVScroll * u_Time;
+			#endif
+			colour *= texture(SAMPLER_2D(u_Texture), uv);
 		#else
 			//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
 			vec2 uv = fract(v_UV);
@@ -337,8 +346,10 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 }
 
 const enum RenderFlags {
-	Translucent		 = 0x2000,
-	Unlit			 = 0x1000,
+	Translucent		 = 0x8000,
+	KeepBackfaces    = 0x4000,
+	Unlit			 = 0x2000,
+	ScrollUVs        = 0x1000,
 	HasTexture		 = 0x800,
 	TextureHasAlpha  = 0x400,
 	TextureTilemap	 = 0x200,
@@ -355,6 +366,7 @@ class StaticObject implements Destroyable {
 	modelMatrix? : mat4;
 	aabb : AABB;
 	colour : GfxColor;
+	scrollUVs : vec2 = [0,0];
 	renderFlags : RenderFlags = 0;
 	textureMapping : TextureMapping[] = [];
 	modelId = 0;
@@ -462,7 +474,8 @@ class StaticObject implements Destroyable {
 
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
-        renderInst.setMegaStateFlags({ cullMode: GfxCullMode.Back });
+		const keepBackfaces = this.renderFlags & RenderFlags.KeepBackfaces;
+        renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
         renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
 		if (this.renderFlags & RenderFlags.Translucent){
@@ -479,7 +492,9 @@ class StaticObject implements Destroyable {
 		
         renderInst.drawIndexes(this.indexCount);
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4);
+		const scrollUVs = this.renderFlags & RenderFlags.ScrollUVs;
+
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?2:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
 		let modelMatrix : ReadonlyMat4 = instanceModelMatrix;
@@ -497,6 +512,11 @@ class StaticObject implements Destroyable {
 		//uniformOffset += fillMatrix4x3(uniformData, uniformOffset, scratchMatrix);
 		uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
 
+		if (scrollUVs){
+			uniformData[uniformOffset++] = this.scrollUVs[0];
+			uniformData[uniformOffset++] = this.scrollUVs[1];
+		}
+
         renderInstManager.submitRenderInst(renderInst);
 	}
 	destroy(device: GfxDevice): void {
@@ -510,7 +530,7 @@ class Entity {
 	meshes : StaticObject[];
 	position: vec3;
 	rotation: number;
-	scale: number;
+	scale: vec3;
 	modelMatrix : mat4 = mat4.create();
 	aabb : AABB = new AABB();
 
@@ -534,23 +554,32 @@ class Entity {
 
 		this.position = position;
 		this.rotation = rotation;
-		this.scale = scale;
+		this.scale = [scale, scale, scale];
 
 		this.updateMatrix();
 	}
 
-	makeTranslucent(alpha : number, unlit = false){
+	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
 		for (const mesh of this.meshes){
 			mesh.colour.a = alpha;
 			mesh.renderFlags |= RenderFlags.Translucent;
 			if (unlit)
 				mesh.renderFlags |= RenderFlags.Unlit;
+			if (keepBackfaces)
+				mesh.renderFlags |= RenderFlags.KeepBackfaces;
+		}
+	}
+
+	scrollUVs(xy : vec2){
+		for (const mesh of this.meshes){
+			mesh.scrollUVs = xy;
+			mesh.renderFlags |= RenderFlags.ScrollUVs;
 		}
 	}
 
 	updateMatrix(){
 		this.modelMatrix = mat4.fromYRotation(mat4.create(), this.rotation); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
-		mat4.scale(this.modelMatrix, this.modelMatrix, [this.scale,this.scale,this.scale]);
+		mat4.scale(this.modelMatrix, this.modelMatrix, this.scale);
 		this.modelMatrix[12] = this.position[0];
 		this.modelMatrix[13] = this.position[1];
 		this.modelMatrix[14] = this.position[2];
@@ -572,6 +601,28 @@ class Entity {
 			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this.modelMatrix);
 	}
 	
+	update(dt : number){}
+}
+
+class SpinningEntity extends Entity {
+	spinSpeed = 1;
+
+	override update(dt : number) {
+		this.rotation = (this.rotation + this.spinSpeed * dt) % MathConstants.TAU;
+		this.updateMatrix();
+	}
+}
+class UndulateEntity extends Entity {
+	t = Math.random() * MathConstants.TAU;
+	baseScale = 1;
+	period = 1;
+	amplitude = 1;
+
+	override update(dt: number): void {
+		this.t = (this.t + dt * this.period) % MathConstants.TAU;
+		this.scale[1] = this.baseScale + Math.sin(this.t) * this.amplitude;
+		this.updateMatrix();
+	}
 }
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
@@ -589,7 +640,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		assert(type >= 0 && type <= 6, "powerup type out of range");
 		// todo: y pos quick
 		// todo: rotate
-		return new Entity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], 0, 1, false);
+		return new SpinningEntity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], 0, 1, false);
 	},
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
@@ -597,12 +648,18 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return new Entity(assets.skeletons.Rex.flat(), [def.x, def.y, def.z], null, 1.2, true);
 	},
 	function spawnLava(def, assets){ // 4
-		// todo: translucency, fireballs, undulation, auto y, etc, highfilter?
+		// todo: fireballs, highfilter, etc?
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 305;
 		const scale = (def.param3 & (1<<2)) ? 1 : 2;
-		return new Entity(assets.level1Models[1], [x,y,z], 0, scale, false);
+		const result = new UndulateEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
+		result.scrollUVs([0.07, 0.03]);
+		result.baseScale = 0.501;
+		result.amplitude = 0.5;
+		result.period = 2.0;
+		result.t = 1;
+		return result;
 	},
 	function spawnEgg(def, assets){ // 5
 		const eggType = def.param0;
@@ -617,8 +674,16 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnGasVent(def, assets){ // 6
 		// todo:billboard? animate
-		const result = new Entity(assets.level1Models[22], [def.x, def.y, def.z], 0, 0.5, false);
-		result.makeTranslucent(0.7);
+
+		class GasVentEntity extends Entity {
+			override update(dt : number){
+				this.scale[1] = Math.random() * 0.3 + 0.5;
+				this.updateMatrix();
+			}
+		};
+
+		const result = new GasVentEntity(assets.level1Models[22], [def.x, def.y, def.z], 0, 0.5, false);
+		result.makeTranslucent(0.7, true, true);
 		return result;
 	},
 	function spawnPteranodon(def, assets){ // 7
@@ -671,8 +736,13 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 210;
 
-		const result = new Entity(assets.level1Models[2], [x,y,z], 0, 2, false);
-		result.makeTranslucent(0.8);
+		const result = new UndulateEntity(assets.level1Models[2], [x,y,z], 0, 2, false);
+		result.makeTranslucent(0.8, false, true);
+		result.scrollUVs([-0.04, 0.08]);
+		result.t = 1;
+		result.period = 3;
+		result.amplitude = 0.5;
+		result.baseScale = 0.501;
 		return result;
 	},
 	function spawnCrystal(def, assets){ // 15
@@ -682,7 +752,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		// todo: y coord quick
 		// todo make not unlit?
 		const result = new Entity(assets.level1Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
-		result.makeTranslucent(0.7);
+		result.makeTranslucent(0.7, false, true);
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
@@ -699,8 +769,11 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return new Entity(assets.level1Models[9], [def.x, def.y + 30 * scale, def.z], null, scale, false);
 	},
 	function spawnSporePod(def, assets){ // 19
-		// todo: update method
-		return new Entity(assets.level1Models[24], [def.x, def.y, def.z], 0, 0.5, false);
+		const result = new UndulateEntity(assets.level1Models[24], [def.x, def.y, def.z], 0, 0.5, false);
+		result.baseScale = result.scale[1];
+		result.amplitude = 0.1;
+		result.period = 2.5;
+		return result;
 	},
 ];
 function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
@@ -766,8 +839,9 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		uniformOffset += 1;
 
 
-
-
+		const dt = viewerInput.deltaTime * 0.001;
+		for (const entity of this.entities)
+			entity.update(dt);
 
 		// todo multiple meshes
 		this.entities.sort((e1,e2)=>{
