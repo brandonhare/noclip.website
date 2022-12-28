@@ -41,6 +41,17 @@ class Program extends DeviceProgram {
 	static ub_SceneParams = 0;
 	static ub_DrawParams = 1;
 
+	constructor(flags : RenderFlags){
+		super();
+
+		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
+		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
+		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
+		this.setDefineBool("TEXTURE_HAS_ALPHA", (flags & RenderFlags.TextureHasAlpha) !== 0);
+		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
+	}
+
+	/*
 	constructor(uvs : boolean, normals : boolean, colours : boolean, texture : boolean, textureHasAlpha : boolean, terrain : boolean){
 		super();
 		assert(uvs === texture || terrain, "uv/texture mismatch!");
@@ -52,6 +63,7 @@ class Program extends DeviceProgram {
 		this.setDefineBool("TEXTURE_HAS_ALPHA", textureHasAlpha);
 		this.setDefineBool("TERRAIN", terrain);
 	}
+	*/
 
 	override both = 
 `
@@ -65,6 +77,7 @@ layout(std140) uniform ub_SceneParams {
 	Mat4x4 u_ClipFromWorldMatrix;
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
+	float u_Time;
 };
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
@@ -90,7 +103,7 @@ void main() {
 	v_Colour = vec4(a_Colour, 1.0);
 	v_Normal = MulNormalMatrix(u_WorldFromModelMatrix, a_Normal);
 	v_UV = a_UV;
-	#ifdef TERRAIN
+	#ifdef TILEMAP
 	v_UV = a_Position.xz;
 	v_Id = int(a_TextureId);
 	#endif
@@ -100,94 +113,97 @@ void main() {
 `;
 	override frag = 
 `
-#ifdef TERRAIN
+#ifdef TILEMAP
 precision mediump float;
 precision lowp sampler2DArray;
-uniform sampler2DArray u_TerrainTexture;
+uniform sampler2DArray u_TilemapTexture;
+flat in int v_Id;
 #else
 uniform sampler2D u_Texture;
 #endif
 in vec4 v_Colour;
 in vec2 v_UV;
 in vec3 v_Normal;
-flat in int v_Id;
 
 void main(){
 	vec4 colour = u_Colour;
 	
-	#ifdef HAS_COLOURS
-		colour *= v_Colour;
-	#endif
 	
 	#ifdef HAS_TEXTURE
-		colour *= texture(SAMPLER_2D(u_Texture), v_UV);
+
+		#ifndef TILEMAP
+			colour *= texture(SAMPLER_2D(u_Texture), v_UV);
+		#else
+			//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
+			vec2 uv = fract(v_UV);
+
+			const int TILE_FLIPX_MASK = (1<<15);
+			const int TILE_FLIPY_MASK = (1<<14);
+			const int TILE_FLIPXY_MASK = (TILE_FLIPY_MASK|TILE_FLIPX_MASK);
+			const int TILE_ROTATE_MASK = ((1<<13)|(1<<12));
+			const int TILE_ROT1 = (1<<12);
+			const int TILE_ROT2 = (2<<12);
+			const int TILE_ROT3 = (3<<12);
+
+			int flipBits = v_Id & (TILE_FLIPXY_MASK | TILE_ROTATE_MASK);
+			int textureId = v_Id & 0xFFF;
+
+			switch (flipBits) {
+				case 0:
+				case TILE_FLIPXY_MASK | TILE_ROT2:
+					break;
+				case TILE_FLIPX_MASK:
+				case TILE_FLIPY_MASK | TILE_ROT2:
+					uv.x = 1.0 - uv.x;
+					//textureId = 254;
+					break;
+				case TILE_FLIPY_MASK:
+				case TILE_FLIPX_MASK | TILE_ROT2:
+					uv.y = 1.0 - uv.y;
+					//textureId = 254;
+					break;
+				case TILE_FLIPXY_MASK:
+				case TILE_ROT2:
+					uv = 1.0 - uv;
+					//textureId = 254;
+					break;
+				case TILE_ROT1:
+				case TILE_FLIPXY_MASK | TILE_ROT3:
+					uv = vec2(uv.y, 1.0 - uv.x); // todo verify
+					//textureId = 254;
+					break;
+				case TILE_ROT3:
+				case TILE_FLIPXY_MASK | TILE_ROT1:
+					uv = vec2(1.0 - uv.y, uv.x); // todo verify
+					//textureId = 254;
+					break;
+				case TILE_FLIPX_MASK | TILE_ROT1:
+				case TILE_FLIPY_MASK | TILE_ROT3:
+					uv = vec2(1.0 - uv.y, 1.0 - uv.x); // todo verify
+					//textureId = 254;
+					break;	
+				case TILE_FLIPX_MASK | TILE_ROT3:
+				case TILE_FLIPY_MASK | TILE_ROT1:
+					uv = uv.yx; // todo verify
+					//textureId = 254;
+				default:
+					//textureId = 254;
+					break;
+			}
+
+			colour *= texture(SAMPLER_2D(u_TilemapTexture), vec3(uv, textureId));
+		#endif // end ifdef tilemap
+
 		#ifdef TEXTURE_HAS_ALPHA
 			if (colour.a < 0.5) { discard; }
 		#endif
 	#endif
-
-	#ifdef TERRAIN
-		//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
-		vec2 uv = fract(v_UV);
-
-		const int TILE_FLIPX_MASK = (1<<15);
-		const int TILE_FLIPY_MASK = (1<<14);
-		const int TILE_FLIPXY_MASK = (TILE_FLIPY_MASK|TILE_FLIPX_MASK);
-		const int TILE_ROTATE_MASK = ((1<<13)|(1<<12));
-		const int TILE_ROT1 = (1<<12);
-		const int TILE_ROT2 = (2<<12);
-		const int TILE_ROT3 = (3<<12);
-
-		int flipBits = v_Id & (TILE_FLIPXY_MASK | TILE_ROTATE_MASK);
-		int textureId = v_Id & 0xFFF;
-
-		switch (flipBits) {
-			case 0:
-			case TILE_FLIPXY_MASK | TILE_ROT2:
-				break;
-			case TILE_FLIPX_MASK:
-			case TILE_FLIPY_MASK | TILE_ROT2:
-				uv.x = 1.0 - uv.x;
-				//textureId = 254;
-				break;
-			case TILE_FLIPY_MASK:
-			case TILE_FLIPX_MASK | TILE_ROT2:
-				uv.y = 1.0 - uv.y;
-				//textureId = 254;
-				break;
-			case TILE_FLIPXY_MASK:
-			case TILE_ROT2:
-				uv = 1.0 - uv;
-				//textureId = 254;
-				break;
-			case TILE_ROT1:
-			case TILE_FLIPXY_MASK | TILE_ROT3:
-				uv = vec2(uv.y, 1.0 - uv.x); // todo verify
-				//textureId = 254;
-				break;
-			case TILE_ROT3:
-			case TILE_FLIPXY_MASK | TILE_ROT1:
-				uv = vec2(1.0 - uv.y, uv.x); // todo verify
-				//textureId = 254;
-				break;
-			case TILE_FLIPX_MASK | TILE_ROT1:
-			case TILE_FLIPY_MASK | TILE_ROT3:
-				uv = vec2(1.0 - uv.y, 1.0 - uv.x); // todo verify
-				//textureId = 254;
-				break;	
-			case TILE_FLIPX_MASK | TILE_ROT3:
-			case TILE_FLIPY_MASK | TILE_ROT1:
-				uv = uv.yx; // todo verify
-				//textureId = 254;
-			default:
-				//textureId = 254;
-				break;
-		}
-
-		colour *= texture(SAMPLER_2D(u_TerrainTexture), vec3(uv, textureId));
+	
+	#ifdef HAS_VERTEX_COLOURS
+		colour *= v_Colour;
 	#endif
 
-	#ifdef HAS_NORMALS
+	#ifndef UNLIT
 		vec3 normal = normalize(v_Normal);
 		vec3 lightColour = u_AmbientColour.xyz;
 		for (int i = 0; i < NUM_LIGHTS; ++i){
@@ -205,11 +221,23 @@ void main(){
 class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	textures = new WeakMap<Qd3DTexture, GfxTexture>();
 
+	modelIdCount = 0;
+
 	assets : ProcessedAssets;
 	allTextures : GfxTexture[] = [];
 
+	programs = new Map<RenderFlags, GfxProgram>();
+
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
+
+	getProgram(renderFlags : RenderFlags){
+		let program = this.programs.get(renderFlags);
+		if (program) return program;
+		program = this.createProgram(new Program(renderFlags));
+		this.programs.set(renderFlags, program);
+		return program;
+	}
 
 	createTexture(texture : Qd3DTexture){
 		let result = this.textures.get(texture);
@@ -300,6 +328,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		const device = this.device;
 
 		this.allTextures.forEach((tex)=>device.destroyTexture(tex));
+		this.programs.forEach((program)=>device.destroyProgram(program));
 		this.destroyModels();
 
 		super.destroy();
@@ -307,8 +336,18 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 
 }
 
+const enum RenderFlags {
+	Translucent		 = 0x2000,
+	Unlit			 = 0x1000,
+	HasTexture		 = 0x800,
+	TextureHasAlpha  = 0x400,
+	TextureTilemap	 = 0x200,
+	HasVertexColours = 0x100,
+	ModelIndex = 0xFF
+}
+
 class StaticObject implements Destroyable {
-	gfxProgram : GfxProgram;
+	gfxProgram : GfxProgram | null = null;
 	indexCount : number;
 	buffers : GfxBuffer[] = [];
 	inputLayout : GfxInputLayout;
@@ -316,7 +355,9 @@ class StaticObject implements Destroyable {
 	modelMatrix? : mat4;
 	aabb : AABB;
 	colour : GfxColor;
+	renderFlags : RenderFlags = 0;
 	textureMapping : TextureMapping[] = [];
+	modelId = 0;
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh){
 		this.indexCount = mesh.numTriangles * 3;
@@ -324,6 +365,10 @@ class StaticObject implements Destroyable {
 		this.colour = mesh.colour;
 		if (mesh.baseTransform)
 			this.modelMatrix = mat4.clone(mesh.baseTransform);
+		this.modelId = ++cache.modelIdCount;
+
+		this.renderFlags |= this.modelId;
+		assert((this.renderFlags & RenderFlags.ModelIndex) == this.modelId);
 
 		const vertexBufferDescriptors : GfxVertexBufferDescriptor[] = [];
 		const vertexLayoutDescriptors : GfxInputLayoutBufferDescriptor[] = [];
@@ -362,12 +407,28 @@ class StaticObject implements Destroyable {
 		const hasColours = pushBuffer(mesh.vertexColours?.buffer, 12, Program.a_Colours, GfxFormat.F32_RGB);
 		const hasTilemap = pushBuffer(mesh.tilemapIds?.buffer, 2, Program.a_TextureIds, GfxFormat.U16_R);
 
-		const texture = mesh.texture;
-		if (texture){
-			this.textureMapping.push(cache.createTextureMapping(texture));
+		if (!hasNormals)
+			this.renderFlags |= RenderFlags.Unlit; // no lighting without normals
+
+		if (hasColours)
+			this.renderFlags |= RenderFlags.HasVertexColours;
+
+		if (this.colour.a < 1){
+			this.renderFlags |= RenderFlags.Translucent;
 		}
 
-		this.gfxProgram = cache.createProgram(new Program(hasUvs, hasNormals, hasColours, texture != null, !!(texture?.hasAlpha), hasTilemap));
+		const texture = mesh.texture;
+		if (texture){
+			assert(hasUvs || hasTilemap, "model has texture but no UVs!");
+
+			this.textureMapping.push(cache.createTextureMapping(texture));
+
+			this.renderFlags |= RenderFlags.HasTexture;
+			if (texture.hasAlpha)
+				this.renderFlags |= RenderFlags.TextureHasAlpha;
+			if (hasTilemap)
+				this.renderFlags |= RenderFlags.TextureTilemap;
+		}
 
 		const indexBuffer = makeStaticDataBuffer(device, GfxBufferUsage.Index, mesh.indices.buffer);
 		let indexBufferFormat : GfxFormat;
@@ -388,7 +449,7 @@ class StaticObject implements Destroyable {
 		};
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, instanceModelMatrix : ReadonlyMat4): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, instanceModelMatrix : ReadonlyMat4): void {
         const renderInst = renderInstManager.newRenderInst();
 		/*
         renderInst.setBindingLayouts([{
@@ -396,13 +457,15 @@ class StaticObject implements Destroyable {
 			numSamplers : 1,
 		}]);
 		*/
-        renderInst.setGfxProgram(this.gfxProgram);
+
+		const gfxProgram = cache.getProgram(this.renderFlags);
+
+        renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
         renderInst.setMegaStateFlags({ cullMode: GfxCullMode.Back });
         renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
-
-		if (this.colour.a < 1.0){
+		if (this.renderFlags & RenderFlags.Translucent){
 			const megaState = renderInst.setMegaStateFlags({
 				depthWrite: false,
 			});
@@ -412,7 +475,6 @@ class StaticObject implements Destroyable {
 				blendSrcFactor: GfxBlendFactor.SrcAlpha,
 			});
 		}
-		
 		
 		
         renderInst.drawIndexes(this.indexCount);
@@ -449,7 +511,7 @@ class Entity {
 	position: vec3;
 	rotation: number;
 	scale: number;
-	modelMatrix : mat4;
+	modelMatrix : mat4 = mat4.create();
 	aabb : AABB = new AABB();
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
@@ -474,25 +536,40 @@ class Entity {
 		this.rotation = rotation;
 		this.scale = scale;
 
-		this.modelMatrix = mat4.fromYRotation(mat4.create(), rotation); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
-		mat4.scale(this.modelMatrix, this.modelMatrix, [scale,scale,scale]);
-		this.modelMatrix[12] = position[0];
-		this.modelMatrix[13] = position[1];
-		this.modelMatrix[14] = position[2];
+		this.updateMatrix();
+	}
 
-		for (const mesh of meshes){
+	makeTranslucent(alpha : number, unlit = false){
+		for (const mesh of this.meshes){
+			mesh.colour.a = alpha;
+			mesh.renderFlags |= RenderFlags.Translucent;
+			if (unlit)
+				mesh.renderFlags |= RenderFlags.Unlit;
+		}
+	}
+
+	updateMatrix(){
+		this.modelMatrix = mat4.fromYRotation(mat4.create(), this.rotation); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
+		mat4.scale(this.modelMatrix, this.modelMatrix, [this.scale,this.scale,this.scale]);
+		this.modelMatrix[12] = this.position[0];
+		this.modelMatrix[13] = this.position[1];
+		this.modelMatrix[14] = this.position[2];
+
+		this.aabb.reset();
+		for (const mesh of this.meshes){
 			this.aabb.union(this.aabb, mesh.aabb);
 		}
 		this.aabb.transform(this.aabb, this.modelMatrix);
 	}
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput): void {
+
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
 
 		if (!viewerInput.camera.frustum.contains(this.aabb)){
 			return;
 		}
 		
 		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, this.modelMatrix);
+			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this.modelMatrix);
 	}
 	
 }
@@ -520,7 +597,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return new Entity(assets.skeletons.Rex.flat(), [def.x, def.y, def.z], null, 1.2, true);
 	},
 	function spawnLava(def, assets){ // 4
-		// todo: translucency, fireballs, undulation, auto y, etc
+		// todo: translucency, fireballs, undulation, auto y, etc, highfilter?
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 305;
@@ -539,8 +616,10 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return egg;
 	},
 	function spawnGasVent(def, assets){ // 6
-		// todo: translucency? billboard
-		return new Entity(assets.level1Models[22], [def.x, def.y, def.z], 0, 0.5, false);
+		// todo:billboard? animate
+		const result = new Entity(assets.level1Models[22], [def.x, def.y, def.z], 0, 0.5, false);
+		result.makeTranslucent(0.7);
+		return result;
 	},
 	function spawnPteranodon(def, assets){ // 7
 		// todo fly and stuff
@@ -591,15 +670,20 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 210;
-		return new Entity(assets.level1Models[2], [x,y,z], 0, 2, false);
+
+		const result = new Entity(assets.level1Models[2], [x,y,z], 0, 2, false);
+		result.makeTranslucent(0.8);
+		return result;
 	},
 	function spawnCrystal(def, assets){ // 15
 		const crystalMeshIndices = [12, 13, 14];
 		const type = def.param0;
 		assert(type >= 0 && type <= 2, "crystal type out of range");
 		// todo: y coord quick
-		// todo: transparency/backfaces
-		return new Entity(assets.level1Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
+		// todo make not unlit?
+		const result = new Entity(assets.level1Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
+		result.makeTranslucent(0.7);
+		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
 		return new Entity(assets.skeletons.Diloph.flat(), [def.x, def.y, def.z], null, 0.8, true);
@@ -628,12 +712,14 @@ type ProcessedAssets = Assets<StaticObject, StaticObject>;
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
     entities: Entity[] = [];
+	cache : Cache;
 
 	textureHolder : UI.TextureListHolder;
 
 
 	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[]){
-		const cache = new Cache(device)
+		const cache = new Cache(device);
+		this.cache = cache;
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
 
@@ -660,7 +746,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 			numSamplers : 1,
 		}]);
 		// set scene uniforms
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 8*1);
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 8*1 + 1);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
 		// camera matrix
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
@@ -676,10 +762,25 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		//uniformOffset += fillVec4(uniformData, uniformOffset, 0.70014004201400490176464704033012, 0.70014004201400490176464704033012, -0.14002800840280098035292940806602, 0);
 		// light[1].colour
 		//uniformOffset += fillVec4(uniformData, uniformOffset, 0.4, 0.36, 0.24, 1);
+		uniformData[uniformOffset] = viewerInput.time * 0.001;
+		uniformOffset += 1;
+
+
+
+
+
+		// todo multiple meshes
+		this.entities.sort((e1,e2)=>{
+			// todo better depth sort and stuff
+			const flag1 = e1.meshes[0].renderFlags;
+			const flag2 = e2.meshes[0].renderFlags;
+			return flag1 - flag2;
+		});
 
         const renderInstManager = this.renderHelper.renderInstManager;
         for (let i = 0; i < this.entities.length; i++)
-            this.entities[i].prepareToRender(device, renderInstManager, viewerInput);
+            this.entities[i].prepareToRender(device, renderInstManager, viewerInput, this.cache);
+			
         renderInstManager.popTemplateRenderInst();
         this.renderHelper.prepareToRender();
 	}
