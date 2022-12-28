@@ -10,7 +10,7 @@ import { GridPlane } from "../InteractiveExamples/GridPlane";
 import { makeAttachmentClearDescriptor, makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor, pushAntialiasingPostProcessPass, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
-import { NamedArrayBufferSlice } from "../DataFetcher";
+import { DataFetcher, NamedArrayBufferSlice } from "../DataFetcher";
 import { assert, readString } from "../util";
 import { Endianness } from "../endian";
 import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
@@ -23,7 +23,7 @@ import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, Qd3DSkeleton } from "./QuickDraw3D";
-import { parseTerrain, LevelObjectDef } from "./terrain";
+import { parseTerrain, LevelObjectDef, createMenuObjectList } from "./terrain";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
@@ -308,13 +308,14 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		
 		const skeletons : any = {};
 		for (const name of SkeletonNames){
-			skeletons[name] = make(rawAssets.skeletons[name]);
+			skeletons[name] = make(rawAssets.skeletons[name] ?? []);
 		}
 
 		this.assets = {
 			globalModels : make(rawAssets.globalModels),
 			level1Models : make(rawAssets.level1Models),
-			terrainModel : new StaticObject(device, this, rawAssets.terrainModel),
+			menuModels : make(rawAssets.menuModels),
+			terrainModel : rawAssets.terrainModel && new StaticObject(device, this, rawAssets.terrainModel),
 			skeletons,
 		}
 	}
@@ -328,9 +329,9 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		destroyModels(this.assets.globalModels);
 		destroyModels(this.assets.level1Models);
 		for (const name of SkeletonNames){
-			destroyModels(this.assets.skeletons[name]);
+			destroyModels(this.assets.skeletons[name] ?? []);
 		}
-		this.assets.terrainModel.destroy(device);
+		this.assets.terrainModel?.destroy(device);
 	}
 
 	public override destroy(): void {
@@ -627,12 +628,12 @@ class UndulateEntity extends Entity {
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
 	// todo: animate, mesh, push up?
-	return new Entity(assets.skeletons.Tricer.flat(), [def.x, def.y, def.z], null, 2.2, false);
+	return new Entity(assets.skeletons.Tricer!.flat(), [def.x, def.y, def.z], null, 2.2, false);
 };
 const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
 		// todo animate, shadow
-		return new Entity(assets.skeletons.Deinon.flat(), [def.x, def.y, def.z], 0, 1, true);
+		return new Entity(assets.skeletons.Deinon!.flat(), [def.x, def.y, def.z], 0, 1, true);
 	},
 	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
@@ -645,7 +646,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
 		// todo: animate, mesh, push up, rotation, shadow (ffor eveerything)
-		return new Entity(assets.skeletons.Rex.flat(), [def.x, def.y, def.z], null, 1.2, true);
+		return new Entity(assets.skeletons.Rex!.flat(), [def.x, def.y, def.z], null, 1.2, true);
 	},
 	function spawnLava(def, assets){ // 4
 		// todo: fireballs, highfilter, etc?
@@ -688,7 +689,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnPteranodon(def, assets){ // 7
 		// todo fly and stuff
-		const ptera = new Entity(assets.skeletons.Ptera.flat(), [def.x, def.y + 100, def.z], null, 1, true)
+		const ptera = new Entity(assets.skeletons.Ptera!.flat(), [def.x, def.y + 100, def.z], null, 1, true)
 		if (def.param3 & (1<<1)) {
 			// todo attach
 			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
@@ -697,7 +698,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return ptera;
 	},
 	function spawnStegosaurus(def, assets){ // 8
-		return new Entity(assets.skeletons.Stego.flat(), [def.x, def.y, def.z], null, 1.4, true);
+		return new Entity(assets.skeletons.Stego!.flat(), [def.x, def.y, def.z], null, 1.4, true);
 	},
 	function spawnTimePortal(def, assets){ // 9
 		// todo: everything
@@ -756,7 +757,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
-		return new Entity(assets.skeletons.Diloph.flat(), [def.x, def.y, def.z], null, 0.8, true);
+		return new Entity(assets.skeletons.Diloph!.flat(), [def.x, def.y, def.z], null, 0.8, true);
 	},
 	function spawnStepStone(def, assets){ // 17
 		// todo: quick y
@@ -798,7 +799,9 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 
 		cache.createModels(assets);
 
-		this.entities.push(new Entity(cache.assets.terrainModel, [0,0,0],0,1,false));
+		if (cache.assets.terrainModel)
+			this.entities.push(new Entity(cache.assets.terrainModel, [0,0,0],0,1,false));
+
 		for (const objectDef of objectList){
 			const entity = (EntityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, cache.assets);
 			if (entity){
@@ -900,9 +903,10 @@ const SkeletonNames = [
 type Assets<MeshType, SkeletonType> = {
 	globalModels : MeshType[][],
 	level1Models : MeshType[][],
-	terrainModel : MeshType,
+	menuModels : MeshType[][],
+	terrainModel? : MeshType,
 	skeletons : {
-		[String in typeof SkeletonNames[number]] : SkeletonType[][]
+		[String in typeof SkeletonNames[number]]? : SkeletonType[][]
 	}
 };
 type RawAssets = Assets<Qd3DMesh, Qd3DSkeleton>;
@@ -910,7 +914,34 @@ type RawAssets = Assets<Qd3DMesh, Qd3DSkeleton>;
 class NanosaurSceneDesc implements Viewer.SceneDesc {
 	constructor(public id : string, public name : string, public levelName : string){}
 
+	loadSkeleton(dataFetcher : DataFetcher, name : typeof SkeletonNames[number]){
+		return Promise.all([
+			dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.3dmf`).then(parseQd3DMeshGroup),
+			null,//context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.skeleton.rsrc`),
+		]).then(([modelData, skeletonData])=>modelData);
+	}
+
+	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
+		
+		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface.3dmf")
+			.then(parseQd3DMeshGroup);
+		const playerSkeletonPromise = this.loadSkeleton(context.dataFetcher, "Deinon");
+
+		const assets : RawAssets = {
+			globalModels : [],
+			level1Models : [],
+			menuModels : await menuModelsPromise,
+			skeletons : {
+				Deinon : await playerSkeletonPromise
+			}
+		};
+		return new NanosaurSceneRenderer(device, context, assets, createMenuObjectList());
+	}
+
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+
+		if (this.levelName === "MainMenu")
+			return this.createMenuScene(device, context);
 
 		const terrainPromise = Promise.all([
 			context.dataFetcher.fetchData(`${pathBase}/terrain/${this.levelName}.ter`),
@@ -923,12 +954,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		const level1ModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Level1_Models.3dmf")
 			.then(parseQd3DMeshGroup);
 
-		const skeletonPromises = SkeletonNames.map((name)=>
-			Promise.all([
-				context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.3dmf`).then(parseQd3DMeshGroup),
-				null,//context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.skeleton.rsrc`),
-			]).then(([modelData, skeletonData])=>modelData)
-		)
+		const skeletonPromises = SkeletonNames.map((name)=>this.loadSkeleton(context.dataFetcher, name))
 
 		const [terrainModel, objectList] = await terrainPromise;
 
@@ -940,6 +966,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		const assets : RawAssets = {
 			globalModels : await globalModelsPromise,
 			level1Models : await level1ModelsPromise,
+			menuModels : [],
 			terrainModel,
 			skeletons,
 		}
@@ -954,6 +981,7 @@ const name = "Nanosaur";
 const sceneDescs = [
 	new NanosaurSceneDesc("level1", "Level 1", "Level1"),
 	new NanosaurSceneDesc("level1Extreme", "Level 1 (Extreme)", "Level1Pro"),
+	new NanosaurSceneDesc("mainmenu", "Main Menu", "MainMenu"),
 ];
 
 

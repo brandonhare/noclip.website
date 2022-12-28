@@ -4,20 +4,83 @@ import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
 import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
+import { MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 import { Qd3DMesh, swizzle1555Pixels, Qd3DTexture } from "./QuickDraw3D";
+
+export const enum ObjectType {
+	Player,
+	Powerup,
+	Tricer,
+	Rex,
+	Lava,
+	Egg,
+	GasVent,
+	Ptera,
+	Stego,
+	TimePortal,
+	Tree,
+	Boulder,
+	Mushroom,
+	Bush,
+	WaterPatch,
+	Crystal,
+	Spitter,
+	StepStone,
+	RollingBoulder,
+	SporePod,
+	// main menu hack items
+	MenuBackground,
+	OptionsIcon,
+	InfoIcon,
+	QuitIcon,
+	HighScoresIcon,
+}
 
 export type LevelObjectDef = {
 	x : number,
 	y : number, // terrain height
 	z : number,
-	type : number,
+	type : ObjectType,
 	param0 : number,
-	param1 : number,
-	param2 : number,
+	//param1 : number, // unused
+	//param2 : number, // unused
 	param3 : number,
-	flags : number,
+	//flags : number,  // unused
+
+	// main menu hack
+	rot? : number,
+	scale? : number,
 };
+
+export function createMenuObjectList() : LevelObjectDef[] {
+	
+	const result : LevelObjectDef[] = [
+		{
+			type : ObjectType.MenuBackground,
+			x : 0,
+			y : 0,
+			z : 0,
+			param0:0,
+			param3:0,
+		}
+	];
+	for (let i = 0; i < 4; ++i){
+		const angle = MathConstants.TAU * 5 / i;
+		result.push({
+			type : ObjectType.MenuBackground + i,
+			x : Math.sin(angle) * 310,
+			y : 0,
+			z : Math.cos(angle) * 310 - 5,
+			param0:0,
+			param3:0,
+			rot : angle,
+		});
+	}
+	result[1].type = ObjectType.Player;
+	result[1].scale = 0.8;
+	return result;
+}
 
 export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: ArrayBufferSlice): [Qd3DMesh, LevelObjectDef[]] {
 
@@ -219,7 +282,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		//const nextId = view.getUint16(offset + 12);
 		//const prevId = view.getUint16(offset + 16);
 		const y = getExactHeight(x / OREOMAP_TILE_SIZE, z / OREOMAP_TILE_SIZE) * HEIGHT_SCALE;
-		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, param1, param2, param3, flags });
+		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, /*param1,param2,flags,*/ param3 });
 	}
 
 
