@@ -517,6 +517,9 @@ class StaticObject implements Destroyable {
 	}
 }
 
+// nothing, delete us, spawn new entity
+type EntityUpdateResult = void | false | Entity;
+
 class Entity {
 	meshes : StaticObject[];
 	position: vec3;
@@ -602,7 +605,7 @@ class Entity {
 			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 	}
 	
-	update(dt : number){}
+	update(dt : number) : EntityUpdateResult {}
 }
 
 class SpinningEntity extends Entity {
@@ -640,21 +643,100 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const type = def.param0;
 		assert(type >= 0 && type <= 6, "powerup type out of range");
 		// todo: y pos quick
-		// todo: rotate
+		// todo darken shadow?
 		return new SpinningEntity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], 0, 1, false);
 	},
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
-		// todo: animate, mesh, push up, rotation, shadow (ffor eveerything)
+		// todo: animate, mesh, push up, rotation, shadow (for eveerything)
 		return new Entity(assets.skeletons.Rex!.flat(), [def.x, def.y, def.z], null, 1.2, true);
 	},
 	function spawnLava(def, assets){ // 4
-		// todo: fireballs, highfilter, etc?
+
+		const fireballMesh = assets.level1Models[26];
+		const smokeMesh = assets.globalModels[3];
+
+		class SmokePuffEntity extends Entity {
+			t = 0.5;
+			decayRate = Math.random() * 0.3 + 0.9;
+
+			override update(dt : number) : void | false {
+				this.t -= dt * this.decayRate;
+				if (this.t < 0)
+					return false;
+
+				this.colour.a = Math.min(1, 3 * this.t);
+
+				for (let i = 0; i < 3; ++i){
+					this.scale[i] += dt * 0.5;
+				}
+				this.rotation += dt * Math.PI; // todo rotate X
+
+				this.updateMatrix();
+			}
+		}
+
+		class FireballEntity extends Entity {
+
+			velocity : vec3 = [(Math.random() - 0.5) * 300,300 + Math.random() * 400,(Math.random() - 0.5) * 300]
+			puffTimer = 0;
+			killY = 0;
+
+			override update(dt : number) : void | SmokePuffEntity | false {
+				this.velocity[1] -= 560 * dt;
+				for (let i = 0; i < 3; ++i)
+					this.position[i] += this.velocity[i] * dt;
+
+				if (this.position[1] < this.killY){
+					// todo destroy when hit ground
+					return false;
+				}
+				// todo rotate XZ
+				this.rotation += dt * 3 * Math.PI;
+
+				this.updateMatrix();
+
+				this.puffTimer += dt;
+				if (this.puffTimer > 0.06){
+					this.puffTimer %= 0.06;
+					const puff = new SmokePuffEntity(smokeMesh, [...this.position] as vec3, null, Math.random() * 0.1 + 0.4, false);
+					puff.makeTranslucent(0.5, false, true); // todo backfaces?
+					return puff;
+				}
+			}
+		}
+
+		class LavaEntity extends UndulateEntity {
+			fireballTimer = 0;
+			override update(dt : number) : FireballEntity | void {
+				super.update(dt);
+				this.fireballTimer += dt;
+				if (this.fireballTimer > 0.4){
+					this.fireballTimer %= 0.4;
+
+					const pos : vec3 = [
+						this.position[0] + (Math.random() - 0.5) * 700,
+						this.position[1] - 20,
+						this.position[2] + (Math.random() - 0.5) * 700
+					];
+					const fireball = new FireballEntity(fireballMesh, pos, 0, 0.3, false);
+					fireball.killY = this.position[1] - 20;
+					return fireball;
+				}
+			}
+		}
+		
+
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 305;
 		const scale = (def.param3 & (1<<2)) ? 1 : 2;
-		const result = new UndulateEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
+		const shootFireballs = false; //(def.param3 & (1<<1)) !== 0; // todo optimize
+		let result : UndulateEntity;
+		if (shootFireballs)
+			result = new LavaEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
+		else
+			result = new UndulateEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
 		result.scrollUVs([0.07, 0.03]);
 		result.baseScale = 0.501;
 		result.amplitude = 0.5;
@@ -899,8 +981,17 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 
 
 		const dt = viewerInput.deltaTime * 0.001;
-		for (const entity of this.entities)
-			entity.update(dt);
+		for (let i = 0; i < this.entities.length; ++i){
+			const result : EntityUpdateResult = this.entities[i].update(dt);
+			if (result === false){
+				// destroy this enetity
+				this.entities.splice(i, 1);
+				--i;
+			} else if (result){
+				// created new entity
+				this.entities.push(result);
+			}
+		}
 
 		// todo multiple meshes
 		this.entities.sort((e1,e2)=>{
