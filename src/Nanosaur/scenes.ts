@@ -457,7 +457,7 @@ class StaticObject implements Destroyable {
 		};
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, instanceModelMatrix : ReadonlyMat4): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity): void {
         const renderInst = renderInstManager.newRenderInst();
 		/*
         renderInst.setBindingLayouts([{
@@ -466,15 +466,17 @@ class StaticObject implements Destroyable {
 		}]);
 		*/
 
-		const gfxProgram = cache.getProgram(this.renderFlags);
+		const renderFlags = this.renderFlags | entity.extraRenderFlags;
+
+		const gfxProgram = cache.getProgram(renderFlags);
 
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
-		const keepBackfaces = this.renderFlags & RenderFlags.KeepBackfaces;
+		const keepBackfaces = renderFlags & RenderFlags.KeepBackfaces;
         renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
         renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
-		if (this.renderFlags & RenderFlags.Translucent){
+		if (renderFlags & RenderFlags.Translucent){
 			const megaState = renderInst.setMegaStateFlags({
 				depthWrite: false,
 			});
@@ -488,25 +490,18 @@ class StaticObject implements Destroyable {
 		
         renderInst.drawIndexes(this.indexCount);
 
-		const scrollUVs = this.renderFlags & RenderFlags.ScrollUVs;
+		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
 		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?2:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
-		let modelMatrix : ReadonlyMat4 = instanceModelMatrix;
+		let modelMatrix : ReadonlyMat4 = entity.modelMatrix;
 		if (this.modelMatrix){
 			modelMatrix = mat4.mul(mat4.create(), modelMatrix, this.modelMatrix); // todo verify multiplication order
 		}
-		//uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.projectionMatrix);
-		//const scratchMatrix = mat4.create();
-		//mat4.mul(scratchMatrix, viewerInput.camera.viewMatrix, this.modelMatrix);
-		//uniformOffset += fillMatrix4x4(uniformData, uniformOffset, scratchMatrix);
+		
 		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, modelMatrix);
-
-		//const scratchMatrix = mat4.fromYRotation(mat4.create(), viewerInput.time / 2000);
-		//mat4.mul(scratchMatrix, this.modelMatrix, scratchMatrix);
-		//uniformOffset += fillMatrix4x3(uniformData, uniformOffset, scratchMatrix);
-		uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
+		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
 
 		if (scrollUVs){
 			uniformData[uniformOffset++] = this.scrollUVs[0];
@@ -529,12 +524,18 @@ class Entity {
 	scale: vec3;
 	modelMatrix : mat4 = mat4.create();
 	aabb : AABB = new AABB();
+	colour : GfxColor = {r:1,g:1,b:1,a:1};
+	extraRenderFlags : RenderFlags = 0;
+	fullRenderFlags : RenderFlags = 0;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
 		if (!Array.isArray(meshes))
 			meshes = [meshes];
 		this.meshes = meshes;
 
+		for (const mesh of meshes){
+			this.fullRenderFlags |= mesh.renderFlags;
+		}
 
 		if (rotation === null)
 			rotation = Math.random() * MathConstants.TAU;
@@ -556,19 +557,18 @@ class Entity {
 	}
 
 	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
-		for (const mesh of this.meshes){
-			mesh.colour.a = alpha;
-			mesh.renderFlags |= RenderFlags.Translucent;
-			if (unlit)
-				mesh.renderFlags |= RenderFlags.Unlit;
-			if (keepBackfaces)
-				mesh.renderFlags |= RenderFlags.KeepBackfaces;
-		}
+		this.colour.a = alpha;
+		this.extraRenderFlags |= RenderFlags.Translucent;
+		if (unlit)
+			this.extraRenderFlags |= RenderFlags.Unlit;
+		if (keepBackfaces)
+			this.extraRenderFlags |= RenderFlags.KeepBackfaces;
+
+		this.fullRenderFlags |= this.extraRenderFlags;
 	}
 	makeReflective() {
-		for (const mesh of this.meshes){
-			mesh.renderFlags |= RenderFlags.Reflective;
-		}
+		this.extraRenderFlags |= RenderFlags.Reflective;
+		this.fullRenderFlags |= RenderFlags.Reflective;
 	}
 
 	scrollUVs(xy : vec2){
@@ -599,7 +599,7 @@ class Entity {
 		}
 		
 		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this.modelMatrix);
+			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 	}
 	
 	update(dt : number){}
@@ -701,8 +701,37 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return new Entity(assets.skeletons.Stego!.flat(), [def.x, def.y, def.z], null, 1.4, true);
 	},
 	function spawnTimePortal(def, assets){ // 9
-		// todo: everything
-		return new Entity(assets.globalModels[10], [def.x, def.y + 50, def.z], 0, 5, false);
+		class TimePortalRingEntity extends Entity {
+			startY = 0;
+			t = 0;
+			override update(dt : number){
+				this.t = (this.t + dt) % 2.7;
+				if (this.t <= 0.8){
+					const scale = 5 - this.t * 5;
+					this.scale.fill(scale);
+					this.position[1] = this.startY + this.t * 20;
+					this.colour.a = (5 - scale) / 4;
+				} else {
+					const t = this.t - 0.8;
+					this.scale.fill(1);
+					// dy += 250dt
+					// y += dy
+					this.position[1] = this.startY + t * t * 125 + t * 50 + 16;
+					this.colour.a = Math.max(0, 1 - t * 0.6);
+				}
+				this.updateMatrix();
+			}
+		};
+
+		const results : Entity[] = [];
+		for (let i = 0; i < 9; ++i){
+			const ring = new TimePortalRingEntity(assets.globalModels[10], [def.x, def.y + 15, def.z], 0, 5, false);
+			ring.startY = ring.position[1];
+			ring.t = i * 0.3;
+			ring.makeTranslucent(1, false, true);
+			results.push(ring);
+		}
+		return results;
 	},
 	function spawnTree(def, assets){ // 10
 		const treeScales = [
@@ -876,8 +905,8 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		// todo multiple meshes
 		this.entities.sort((e1,e2)=>{
 			// todo better depth sort and stuff
-			const flag1 = e1.meshes[0].renderFlags;
-			const flag2 = e2.meshes[0].renderFlags;
+			const flag1 = e1.fullRenderFlags;
+			const flag2 = e2.fullRenderFlags;
 			return flag1 - flag2;
 		});
 
