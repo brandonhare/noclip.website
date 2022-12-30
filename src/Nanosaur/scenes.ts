@@ -17,7 +17,7 @@ import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
 import { mat4, ReadonlyMat4, vec2, vec3, vec4 } from "gl-matrix";
-import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec3v, fillVec4 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
@@ -51,21 +51,8 @@ class Program extends DeviceProgram {
 		this.setDefineBool("TEXTURE_HAS_ALPHA", (flags & RenderFlags.TextureHasAlpha) !== 0);
 		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
 		this.setDefineBool("SCROLL_UVS", (flags & RenderFlags.ScrollUVs) !== 0);
+		this.setDefineBool("REFLECTIVE", (flags & RenderFlags.Reflective) !== 0);
 	}
-
-	/*
-	constructor(uvs : boolean, normals : boolean, colours : boolean, texture : boolean, textureHasAlpha : boolean, terrain : boolean){
-		super();
-		assert(uvs === texture || terrain, "uv/texture mismatch!");
-		assert(!terrain || texture, "terrian/texture mismatch");
-		if (terrain) texture = false;
-		this.setDefineBool("HAS_NORMALS", normals);
-		this.setDefineBool("HAS_COLOURS", colours);
-		this.setDefineBool("HAS_TEXTURE", texture);
-		this.setDefineBool("TEXTURE_HAS_ALPHA", textureHasAlpha);
-		this.setDefineBool("TERRAIN", terrain);
-	}
-	*/
 
 	override both = 
 `
@@ -77,6 +64,7 @@ struct Light {
 
 layout(std140) uniform ub_SceneParams {
 	Mat4x4 u_ClipFromWorldMatrix;
+	vec4 u_CameraPos;
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
 	float u_Time;
@@ -106,14 +94,21 @@ ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
 	v_Colour = vec4(a_Colour, 1.0);
-	v_Normal = MulNormalMatrix(u_WorldFromModelMatrix, a_Normal);
+	v_Normal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, normalize(a_Normal)));
 	v_UV = a_UV;
 	#ifdef TILEMAP
-	v_UV = a_Position.xz;
-	v_Id = int(a_TextureId);
+		v_UV = a_Position.xz;
+		v_Id = int(a_TextureId);
 	#endif
 
-    gl_Position = Mul(u_ClipFromWorldMatrix, vec4(Mul(u_WorldFromModelMatrix, vec4(a_Position, 1.0)),1.0));
+	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(a_Position, 1.0));
+
+	#ifdef REFLECTIVE
+		v_Normal = normalize(reflect(u_CameraPos.xyz - worldPos, v_Normal));
+		v_UV = v_Normal.xy * 0.5 + 0.5;
+	#endif
+
+    gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
 }
 `;
 	override frag = 
@@ -347,7 +342,8 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 }
 
 const enum RenderFlags {
-	Translucent		 = 0x8000,
+	Translucent		 = 0x10000,
+	Reflective       = 0x8000,
 	KeepBackfaces    = 0x4000,
 	Unlit			 = 0x2000,
 	ScrollUVs        = 0x1000,
@@ -570,6 +566,11 @@ class Entity {
 				mesh.renderFlags |= RenderFlags.KeepBackfaces;
 		}
 	}
+	makeReflective() {
+		for (const mesh of this.meshes){
+			mesh.renderFlags |= RenderFlags.Reflective;
+		}
+	}
 
 	scrollUVs(xy : vec2){
 		for (const mesh of this.meshes){
@@ -633,7 +634,7 @@ function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
 const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
 		// todo animate, shadow
-		return new Entity(assets.skeletons.Deinon!.flat(), [def.x, def.y, def.z], 0, 1, true);
+		return new Entity(assets.skeletons.Deinon!.flat(), [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, true);
 	},
 	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
@@ -776,6 +777,25 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		result.period = 2.5;
 		return result;
 	},
+	// main menu stufff
+	function spawnMenuBackground(def, assets){ // 20
+		const result = new SpinningEntity(assets.menuModels[5], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+		result.scale[1] *= 0.5;
+		result.makeReflective();
+		return result;
+	},
+	function spawnOptionsIcon(def, assets){ // 21
+		return new Entity(assets.menuModels[1], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
+	function spawnInfoIcon(def, assets){ // 22
+		return new Entity(assets.menuModels[2], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
+	function spawnQuitIcon(def, assets){ // 23
+		return new Entity(assets.menuModels[0], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
+	function spawnHighScoresIcon(def, assets){ // 24
+		return new Entity(assets.menuModels[3], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
 ];
 function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 	console.log("invalid object type", def);
@@ -783,19 +803,30 @@ function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 
 type ProcessedAssets = Assets<StaticObject, StaticObject>;
 
+type SceneSettings = {
+	clearColour : GfxColor,
+	ambientColour : GfxColor,
+
+	lightDir : vec4,
+	lightColour : GfxColor,
+};
+
+
 class NanosaurSceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
     entities: Entity[] = [];
 	cache : Cache;
+	sceneSettings : SceneSettings;
 
 	textureHolder : UI.TextureListHolder;
 
 
-	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[]){
+	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings){
 		const cache = new Cache(device);
 		this.cache = cache;
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
+		this.sceneSettings = sceneSettings;
 
 		cache.createModels(assets);
 
@@ -822,22 +853,19 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 			numSamplers : 1,
 		}]);
 		// set scene uniforms
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 8*1 + 1);
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*1 + 1);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
 		// camera matrix
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
+		// camera pos
+		const cameraPos = mat4.getTranslation([0,0,0], viewerInput.camera.worldMatrix);
+		uniformOffset += fillVec4(uniformData, uniformOffset, cameraPos[0], cameraPos[1], cameraPos[2], 1.0);
 		// ambient colour
-		uniformOffset += fillVec4(uniformData, uniformOffset, 0.2, 0.2, 0.2, 1);
-		// light[0].direction
-		//uniformOffset += fillVec4(uniformData, uniformOffset, 1, -0.7, -1, 0);
-		uniformOffset += fillVec4(uniformData, uniformOffset, -0.6337242505244779134653933449776, 0.44360697536713453942577534148432, 0.6337242505244779134653933449776, 0);
-		// light[0].colour
-		uniformOffset += fillVec4(uniformData, uniformOffset, 1.2, 1.2, 1.2, 1);
-		// light[1].direction
-		//uniformOffset += fillVec4(uniformData, uniformOffset, -1, -1, 0.2, 0);
-		//uniformOffset += fillVec4(uniformData, uniformOffset, 0.70014004201400490176464704033012, 0.70014004201400490176464704033012, -0.14002800840280098035292940806602, 0);
-		// light[1].colour
-		//uniformOffset += fillVec4(uniformData, uniformOffset, 0.4, 0.36, 0.24, 1);
+		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.ambientColour);
+		// light direction
+		uniformOffset += fillVec4v(uniformData, uniformOffset, this.sceneSettings.lightDir);
+		// light colour
+		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.lightColour);
 		uniformData[uniformOffset] = viewerInput.time * 0.001;
 		uniformOffset += 1;
 
@@ -865,7 +893,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 	public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
         const renderInstManager = this.renderHelper.renderInstManager;
 
-		const renderPassDescriptor = makeAttachmentClearDescriptor({r:0.95, g:0.95, b:0.75, a:1.0}); // standardFullClearRenderPassDescriptor;
+		const renderPassDescriptor = makeAttachmentClearDescriptor(this.sceneSettings.clearColour); // standardFullClearRenderPassDescriptor;
         const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, renderPassDescriptor);
         const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, renderPassDescriptor);
 
@@ -923,7 +951,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
 		
-		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface.3dmf")
+		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface2.3dmf")
 			.then(parseQd3DMeshGroup);
 		const playerSkeletonPromise = this.loadSkeleton(context.dataFetcher, "Deinon");
 
@@ -935,7 +963,15 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 				Deinon : await playerSkeletonPromise
 			}
 		};
-		return new NanosaurSceneRenderer(device, context, assets, createMenuObjectList());
+		
+		const settings : SceneSettings = {
+			clearColour : {r:0, g:0, b:0, a:1},
+			ambientColour : {r:1, g:1, b:1, a:1.0},
+			lightDir : [-1, 0.7, 1, 0],
+			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+		};
+
+		return new NanosaurSceneRenderer(device, context, assets, createMenuObjectList(), settings);
 	}
 
 	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
@@ -971,7 +1007,14 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			skeletons,
 		}
 
-		return new NanosaurSceneRenderer(device, context, assets, objectList);
+		const settings : SceneSettings = {
+			clearColour : {r:0.95, g:0.95, b:0.75, a:1.0},
+			ambientColour: {r:0.2, g:0.2, b:0.2, a:1.0},
+			lightDir : [-0.6337242505244779134653933449776, 0.44360697536713453942577534148432, 0.6337242505244779134653933449776, 0],
+			lightColour : {r:1.2, g:1.2, b:1.2, a:1},
+		};
+
+		return new NanosaurSceneRenderer(device, context, assets, objectList, settings);
 	}
 	
 }

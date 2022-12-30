@@ -63,10 +63,11 @@ export function createMenuObjectList() : LevelObjectDef[] {
 			z : 0,
 			param0:0,
 			param3:0,
+			scale : 5,
 		}
 	];
-	for (let i = 0; i < 4; ++i){
-		const angle = MathConstants.TAU * 5 / i;
+	for (let i = 0; i < 5; ++i){
+		const angle = MathConstants.TAU * i / 5;
 		result.push({
 			type : ObjectType.MenuBackground + i,
 			x : Math.sin(angle) * 310,
@@ -79,6 +80,7 @@ export function createMenuObjectList() : LevelObjectDef[] {
 	}
 	result[1].type = ObjectType.Player;
 	result[1].scale = 0.8;
+	result[1].rot! += Math.PI / 2;
 	return result;
 }
 
