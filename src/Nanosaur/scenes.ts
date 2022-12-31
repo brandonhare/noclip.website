@@ -9,7 +9,7 @@ import { GfxRenderHelper } from '../gfx/render/GfxRenderHelper';
 import { GridPlane } from "../InteractiveExamples/GridPlane";
 import { makeAttachmentClearDescriptor, makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor, pushAntialiasingPostProcessPass, standardFullClearRenderPassDescriptor } from "../gfx/helpers/RenderGraphHelpers";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
-import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
+import { GfxRendererLayer, GfxRenderInstManager, makeSortKey, makeSortKeyOpaque, makeSortKeyTranslucent, setSortKeyDepth } from "../gfx/render/GfxRenderInstManager";
 import { DataFetcher, NamedArrayBufferSlice } from "../DataFetcher";
 import { assert, readString } from "../util";
 import { Endianness } from "../endian";
@@ -29,6 +29,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { CullMode } from "../gx/gx_enum";
+import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
 
 const pathBase = "nanosaur";
 
@@ -220,6 +221,8 @@ void main(){
 `;
 };
 
+// hack to identify program ids
+type NanosaurGfxProgram = GfxProgram & {nanosaurId : number};
 
 class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	textures = new WeakMap<Qd3DTexture, GfxTexture>();
@@ -229,7 +232,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	assets : ProcessedAssets;
 	allTextures : GfxTexture[] = [];
 
-	programs = new Map<RenderFlags, GfxProgram>();
+	programs = new Map<RenderFlags, NanosaurGfxProgram>();
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
@@ -237,8 +240,10 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	getProgram(renderFlags : RenderFlags){
 		let program = this.programs.get(renderFlags);
 		if (program) return program;
-		program = this.createProgram(new Program(renderFlags));
+		program = this.createProgram(new Program(renderFlags)) as NanosaurGfxProgram;
 		this.programs.set(renderFlags, program);
+		if (!program.nanosaurId)
+			program.nanosaurId = this.programs.size;
 		return program;
 	}
 
@@ -341,8 +346,9 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 }
 
 const enum RenderFlags {
-	Translucent		 = 0x10000,
-	Reflective       = 0x8000,
+	Translucent		 = 0x20000,
+	Reflective       = 0x10000,
+	DrawBackfacesSeparately = 0x8000,
 	KeepBackfaces    = 0x4000,
 	Unlit			 = 0x2000,
 	ScrollUVs        = 0x1000,
@@ -457,7 +463,7 @@ class StaticObject implements Destroyable {
 		};
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity, flipBackfaces = false): void {
         const renderInst = renderInstManager.newRenderInst();
 		/*
         renderInst.setBindingLayouts([{
@@ -467,18 +473,24 @@ class StaticObject implements Destroyable {
 		*/
 
 		const renderFlags = this.renderFlags | entity.extraRenderFlags;
+		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
 		const gfxProgram = cache.getProgram(renderFlags);
 
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
 		const keepBackfaces = renderFlags & RenderFlags.KeepBackfaces;
-        renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
+		const drawBackfacesSeparately = renderFlags & RenderFlags.DrawBackfacesSeparately;
+		if (drawBackfacesSeparately)
+			renderInst.setMegaStateFlags({ cullMode: flipBackfaces ? GfxCullMode.Front : GfxCullMode.Back });
+		else
+        	renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
         renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
-		if (renderFlags & RenderFlags.Translucent){
+		
+		if (translucent){
 			const megaState = renderInst.setMegaStateFlags({
-				depthWrite: false,
+				depthWrite: true,
 			});
 			setAttachmentStateSimple(megaState, {
 				blendMode: GfxBlendMode.Add,
@@ -508,7 +520,15 @@ class StaticObject implements Destroyable {
 			uniformData[uniformOffset++] = this.scrollUVs[1];
 		}
 
+		renderInst.sortKey = setSortKeyDepth(
+			makeSortKey(translucent ? GfxRendererLayer.TRANSLUCENT : GfxRendererLayer.OPAQUE, gfxProgram.nanosaurId),
+			computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entity.position)
+		);
+
         renderInstManager.submitRenderInst(renderInst);
+
+		if (drawBackfacesSeparately && !flipBackfaces)
+			this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
 	}
 	destroy(device: GfxDevice): void {
 		device.destroyInputState(this.inputState);
@@ -529,16 +549,11 @@ class Entity {
 	aabb : AABB = new AABB();
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	extraRenderFlags : RenderFlags = 0;
-	fullRenderFlags : RenderFlags = 0;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
 		if (!Array.isArray(meshes))
 			meshes = [meshes];
 		this.meshes = meshes;
-
-		for (const mesh of meshes){
-			this.fullRenderFlags |= mesh.renderFlags;
-		}
 
 		if (rotation === null)
 			rotation = Math.random() * MathConstants.TAU;
@@ -566,12 +581,9 @@ class Entity {
 			this.extraRenderFlags |= RenderFlags.Unlit;
 		if (keepBackfaces)
 			this.extraRenderFlags |= RenderFlags.KeepBackfaces;
-
-		this.fullRenderFlags |= this.extraRenderFlags;
 	}
 	makeReflective() {
 		this.extraRenderFlags |= RenderFlags.Reflective;
-		this.fullRenderFlags |= RenderFlags.Reflective;
 	}
 
 	scrollUVs(xy : vec2){
@@ -862,9 +874,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const type = def.param0;
 		assert(type >= 0 && type <= 2, "crystal type out of range");
 		// todo: y coord quick
-		// todo make not unlit?
 		const result = new Entity(assets.level1Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
 		result.makeTranslucent(0.7, false, true);
+		result.extraRenderFlags |= RenderFlags.DrawBackfacesSeparately;
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
@@ -969,6 +981,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
 		// camera pos
 		const cameraPos = mat4.getTranslation([0,0,0], viewerInput.camera.worldMatrix);
+		// todo: fix camera pos?
 		uniformOffset += fillVec4(uniformData, uniformOffset, cameraPos[0], cameraPos[1], cameraPos[2], 1.0);
 		// ambient colour
 		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.ambientColour);
@@ -992,14 +1005,6 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 				this.entities.push(result);
 			}
 		}
-
-		// todo multiple meshes
-		this.entities.sort((e1,e2)=>{
-			// todo better depth sort and stuff
-			const flag1 = e1.fullRenderFlags;
-			const flag2 = e2.fullRenderFlags;
-			return flag1 - flag2;
-		});
 
         const renderInstManager = this.renderHelper.renderInstManager;
         for (let i = 0; i < this.entities.length; i++)
