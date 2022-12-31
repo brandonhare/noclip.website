@@ -11,7 +11,7 @@ import { assert, readString } from "../util";
 export type Qd3DMesh = {
 	numTriangles : number;
 	numVertices : number;
-	aabb : AABB, // basetransform is already taken into account
+	aabb : AABB, // baseTransform is already taken into account
 	colour : GfxColor;
 	texture? : Qd3DTexture;
 	baseTransform? : ReadonlyMat4;
@@ -22,11 +22,7 @@ export type Qd3DMesh = {
 	normals?: Float32Array; // xyz
 	vertexColours?: Float32Array; // rgb
 	tilemapIds? : Uint16Array;
-	
-	// todo bounding box
 };
-
-export type Qd3DSkeleton = Qd3DMesh;
 
 export type Qd3DTexture = {
 	width : number;
@@ -253,6 +249,16 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 							assert(posInArray === 0, "PIA must be 0 for normals");
 							assert(currentMesh.normals == undefined, "current mesh already has normals");
 							currentMesh.normals = buffer.createTypedArray(Float32Array, offset, currentMesh.numVertices * 3, Endianness.BIG_ENDIAN);
+							// normalize
+							for (let i = 0; i < currentMesh.numVertices * 3; i += 3){
+								const x = currentMesh.normals[i];
+								const y = currentMesh.normals[i+1];
+								const z = currentMesh.normals[i+2];
+								const length = Math.hypot(x, y, z);
+								currentMesh.normals[i]   = x / length;
+								currentMesh.normals[i+1] = y / length;
+								currentMesh.normals[i+2] = z / length;
+							}
 							offset += currentMesh.numVertices * 12;
 							break;
 						case AttributeType.DIFFUSE_COLOR:
@@ -448,6 +454,9 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 	while (offset < data.byteLength){
 		parseChunk(0);
 	}
+
+	while (meshGroups.length > 0 && meshGroups[meshGroups.length - 1].length === 0)
+		meshGroups.pop();
 
 	assert(textures.every((tex)=>tex.pixels != undefined));
 

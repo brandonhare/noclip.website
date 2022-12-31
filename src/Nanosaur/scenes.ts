@@ -22,14 +22,16 @@ import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorH
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, Qd3DSkeleton } from "./QuickDraw3D";
+import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup } from "./QuickDraw3D";
 import { parseTerrain, LevelObjectDef, createMenuObjectList } from "./terrain";
+import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants, quatFromEulerRadians } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { CullMode } from "../gx/gx_enum";
 import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
+import { parseAppleDouble } from "./AppleDouble";
 
 const pathBase = "nanosaur";
 
@@ -95,7 +97,7 @@ ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
 	v_Colour = vec4(a_Colour, 1.0);
-	v_Normal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, normalize(a_Normal)));
+	v_Normal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, a_Normal));
 	v_UV = a_UV;
 	#ifdef TILEMAP
 		v_UV = a_Position.xz;
@@ -307,7 +309,9 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		
 		const skeletons : any = {};
 		for (const name of SkeletonNames){
-			skeletons[name] = make(rawAssets.skeletons[name] ?? []);
+			const raw = rawAssets.skeletons[name];
+			if (raw)
+				skeletons[name] = new AnimatedObject(device, cache, raw);
 		}
 
 		this.assets = {
@@ -328,7 +332,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		destroyModels(this.assets.globalModels);
 		destroyModels(this.assets.level1Models);
 		for (const name of SkeletonNames){
-			destroyModels(this.assets.skeletons[name] ?? []);
+			this.assets.skeletons[name]?.destroy(device);
 		}
 		this.assets.terrainModel?.destroy(device);
 	}
@@ -337,7 +341,6 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		const device = this.device;
 
 		this.allTextures.forEach((tex)=>device.destroyTexture(tex));
-		this.programs.forEach((program)=>device.destroyProgram(program));
 		this.destroyModels();
 
 		super.destroy();
@@ -537,6 +540,21 @@ class StaticObject implements Destroyable {
 	}
 }
 
+class AnimatedObject implements Destroyable{
+	meshes : StaticObject[];
+	animationData : AnimationData;
+
+	constructor(device : GfxDevice, cache : Cache, skeleton : SkeletalMesh){
+		this.meshes = skeleton.meshes.map((mesh)=>new StaticObject(device, cache, mesh));
+		this.animationData = skeleton.animation;
+	}
+
+	destroy(device: GfxDevice): void {
+		for (const mesh of this.meshes)
+			mesh.destroy(device);
+	}
+};
+
 // nothing, delete us, spawn new entity
 type EntityUpdateResult = void | false | Entity;
 
@@ -620,6 +638,19 @@ class Entity {
 	update(dt : number) : EntityUpdateResult {}
 }
 
+class AnimatedEntity extends Entity{
+	animationController : AnimationController;
+
+	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number){
+		super(mesh.meshes, position, rotation, scale, true);
+		this.animationController = new AnimationController(mesh.animationData);
+	}
+
+	override update(dt : number) : void {
+		this.animationController.update(dt);
+	}
+}
+
 class SpinningEntity extends Entity {
 	spinSpeed = 1;
 
@@ -643,12 +674,12 @@ class UndulateEntity extends Entity {
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
 	// todo: animate, mesh, push up?
-	return new Entity(assets.skeletons.Tricer!.flat(), [def.x, def.y, def.z], null, 2.2, false);
+	return new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2);
 };
 const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
 		// todo animate, shadow
-		return new Entity(assets.skeletons.Deinon!.flat(), [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, true);
+		return new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1);
 	},
 	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
@@ -661,7 +692,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
 		// todo: animate, mesh, push up, rotation, shadow (for eveerything)
-		return new Entity(assets.skeletons.Rex!.flat(), [def.x, def.y, def.z], null, 1.2, true);
+		return new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], null, 1.2);
 	},
 	function spawnLava(def, assets){ // 4
 
@@ -784,7 +815,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnPteranodon(def, assets){ // 7
 		// todo fly and stuff
-		const ptera = new Entity(assets.skeletons.Ptera!.flat(), [def.x, def.y + 100, def.z], null, 1, true)
+		const ptera = new AnimatedEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1)
 		if (def.param3 & (1<<1)) {
 			// todo attach
 			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
@@ -793,7 +824,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return ptera;
 	},
 	function spawnStegosaurus(def, assets){ // 8
-		return new Entity(assets.skeletons.Stego!.flat(), [def.x, def.y, def.z], null, 1.4, true);
+		return new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4);
 	},
 	function spawnTimePortal(def, assets){ // 9
 		class TimePortalRingEntity extends Entity {
@@ -881,7 +912,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
-		return new Entity(assets.skeletons.Diloph!.flat(), [def.x, def.y, def.z], null, 0.8, true);
+		return new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8);
 	},
 	function spawnStepStone(def, assets){ // 17
 		// todo: quick y
@@ -964,7 +995,7 @@ function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 	console.log("invalid object type", def);
 }
 
-type ProcessedAssets = Assets<StaticObject, StaticObject>;
+type ProcessedAssets = Assets<StaticObject, AnimatedObject>;
 
 type SceneSettings = {
 	clearColour : GfxColor,
@@ -1099,10 +1130,10 @@ type Assets<MeshType, SkeletonType> = {
 	menuModels : MeshType[][],
 	terrainModel? : MeshType,
 	skeletons : {
-		[String in typeof SkeletonNames[number]]? : SkeletonType[][]
+		[String in typeof SkeletonNames[number]]? : SkeletonType
 	}
 };
-type RawAssets = Assets<Qd3DMesh, Qd3DSkeleton>;
+type RawAssets = Assets<Qd3DMesh, SkeletalMesh>;
 
 class NanosaurSceneDesc implements Viewer.SceneDesc {
 	constructor(public id : string, public name : string, public levelName : string){}
@@ -1110,8 +1141,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 	loadSkeleton(dataFetcher : DataFetcher, name : typeof SkeletonNames[number]){
 		return Promise.all([
 			dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.3dmf`).then(parseQd3DMeshGroup),
-			null,//context.dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.skeleton.rsrc`),
-		]).then(([modelData, skeletonData])=>modelData);
+			dataFetcher.fetchData(`${pathBase}/Skeletons/${name}.skeleton.rsrc`).then(parseAppleDouble),
+		]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData));
 	}
 
 	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
