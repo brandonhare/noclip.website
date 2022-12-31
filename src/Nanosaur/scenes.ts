@@ -16,7 +16,7 @@ import { Endianness } from "../endian";
 import { makeStaticDataBuffer } from "../gfx/helpers/BufferHelpers";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { DeviceProgram } from "../Program";
-import { mat4, ReadonlyMat4, vec2, vec3, vec4 } from "gl-matrix";
+import { mat4, quat, ReadonlyMat4, vec2, vec3, vec4 } from "gl-matrix";
 import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec3v, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers";
 import { TextureMapping } from "../TextureHolder";
@@ -26,7 +26,7 @@ import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, Qd3DSkeleton } from "./Quick
 import { parseTerrain, LevelObjectDef, createMenuObjectList } from "./terrain";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { MathConstants } from "../MathHelpers";
+import { MathConstants, quatFromEulerRadians } from "../MathHelpers";
 import { AABB } from "../Geometry";
 import { CullMode } from "../gx/gx_enum";
 import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
@@ -543,7 +543,9 @@ type EntityUpdateResult = void | false | Entity;
 class Entity {
 	meshes : StaticObject[];
 	position: vec3;
+	rotX = 0;
 	rotation: number;
+	rotZ = 0;
 	scale: vec3;
 	modelMatrix : mat4 = mat4.create();
 	aabb : AABB = new AABB();
@@ -594,11 +596,9 @@ class Entity {
 	}
 
 	updateMatrix(){
-		this.modelMatrix = mat4.fromYRotation(mat4.create(), this.rotation); //mat4.fromScaling(mat4.create(), [scale,scale,scale]);
-		mat4.scale(this.modelMatrix, this.modelMatrix, this.scale);
-		this.modelMatrix[12] = this.position[0];
-		this.modelMatrix[13] = this.position[1];
-		this.modelMatrix[14] = this.position[2];
+		const rot : quat = [0,0,0,0];
+		quatFromEulerRadians(rot, this.rotX, this.rotation, this.rotZ);
+		mat4.fromRotationTranslationScale(this.modelMatrix, rot, this.position, this.scale);
 
 		this.aabb.reset();
 		for (const mesh of this.meshes){
@@ -682,7 +682,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 				for (let i = 0; i < 3; ++i){
 					this.scale[i] += dt * 0.5;
 				}
-				this.rotation += dt * Math.PI; // todo rotate X
+				this.rotX += dt * Math.PI;
 
 				this.updateMatrix();
 			}
@@ -703,8 +703,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 					// todo destroy when hit ground
 					return false;
 				}
-				// todo rotate XZ
-				this.rotation += dt * 3 * Math.PI;
+
+				this.rotX += dt * 3 * Math.PI;
+				this.rotZ -= dt * MathConstants.TAU;
 
 				this.updateMatrix();
 
@@ -743,9 +744,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 305;
 		const scale = (def.param3 & (1<<2)) ? 1 : 2;
-		const shootFireballs = false; //(def.param3 & (1<<1)) !== 0; // todo optimize
+		const shootFireballs = (def.param3 & (1<<1)) !== 0;
 		let result : UndulateEntity;
-		if (shootFireballs)
+		if (shootFireballs && false) // todo optimize
 			result = new LavaEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
 		else
 			result = new UndulateEntity(assets.level1Models[1], [x,y,z], 0, scale, false);
@@ -901,7 +902,47 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	// main menu stufff
 	function spawnMenuBackground(def, assets){ // 20
-		const result = new SpinningEntity(assets.menuModels[5], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+
+		const eggModel = assets.menuModels[4];
+
+		class EggEntity extends Entity {
+			override update(dt : number) : false | void {
+				this.rotX += dt;
+				this.rotation += dt;
+				this.rotZ += dt;
+				this.position[1] -= dt * 70;
+				if (this.position[1] < -250)
+					return false;
+				this.updateMatrix();
+			}
+		}
+
+		class EggSpawnerEntity extends Entity{
+			t = 0;
+
+			override update(dt : number) : EggEntity | void{
+
+				this.rotation = (this.rotation + dt) % MathConstants.TAU;
+				this.updateMatrix();
+
+				this.t += dt;
+				if (this.t > 0.2){
+					this.t %= 0.2;
+
+					const pos : vec3 = [
+						(Math.random() - 0.5) * 700,
+						400,
+						(Math.random() - 0.5) * 700 + 150
+					];
+					const egg = new EggEntity(eggModel, pos, null, 1, false);
+					egg.rotX = Math.random() * Math.PI;
+					egg.rotZ = Math.random() * Math.PI;
+					return egg;
+				}
+			}
+		};
+
+		const result = new EggSpawnerEntity(assets.menuModels[5], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
 		result.scale[1] *= 0.5;
 		result.makeReflective();
 		return result;
