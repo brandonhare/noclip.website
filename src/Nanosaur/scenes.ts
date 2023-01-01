@@ -23,11 +23,11 @@ import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup } from "./QuickDraw3D";
-import { parseTerrain, LevelObjectDef, createMenuObjectList } from "./terrain";
+import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList } from "./terrain";
 import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
-import { MathConstants, quatFromEulerRadians } from "../MathHelpers";
+import { MathConstants, quatFromEulerRadians, Vec3UnitY, Vec3Zero } from "../MathHelpers";
 import { AABB, Frustum } from "../Geometry";
 import { CullMode } from "../gx/gx_enum";
 import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
@@ -343,6 +343,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			globalModels : make(rawAssets.globalModels),
 			level1Models : make(rawAssets.level1Models),
 			menuModels : make(rawAssets.menuModels),
+			titleModels : make(rawAssets.titleModels),
 			terrainModel : rawAssets.terrainModel && new StaticObject(device, this, rawAssets.terrainModel),
 			skeletons,
 		}
@@ -356,6 +357,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		}
 		destroyModels(this.assets.globalModels);
 		destroyModels(this.assets.level1Models);
+		destroyModels(this.assets.titleModels);
 		for (const name of SkeletonNames){
 			this.assets.skeletons[name]?.destroy(device);
 		}
@@ -776,7 +778,13 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
 		// todo: rotation, shadow (for eveerything)
-		return new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], null, 1.2, false, 0);
+		const title = def.param0 === 1; // title hack
+		const result = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, false, title ? 1 : 0);
+		if (title) {
+			result.animationController.t = 0;
+			result.animationController.animSpeed = 0.8;
+		}
+		return result;
 	},
 	function spawnLava(def, assets){ // 4
 
@@ -1016,7 +1024,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		result.period = 2.5;
 		return result;
 	},
-	// main menu stufff
+	// main menu stuff
 	function spawnMenuBackground(def, assets){ // 20
 
 		const eggModel = assets.menuModels[4];
@@ -1075,6 +1083,58 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	function spawnHighScoresIcon(def, assets){ // 24
 		return new Entity(assets.menuModels[3], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
 	},
+	// title stuff
+	function spawnPangeaLogo(def, assets){ // 25
+		class LogoEntity extends Entity {
+			t = 0;
+			startZ = 0;
+			override checkVisible(frustum: Frustum): boolean {
+				return true;
+			}
+			override update(dt: number): EntityUpdateResult {
+				this.t = (this.t + dt) % 10;
+				this.position[2] = this.startZ + this.t * 45;
+				this.rotation = Math.PI * -0.5 + this.t * Math.PI / 9;
+				this.rotX = Math.sin(this.t * 1.5) * 0.3;
+				// fade in
+				this.colour.r = this.colour.g = this.colour.b = Math.min(1, this.t * 1.3);
+				this.updateMatrix();
+			}
+		}
+		const result = new LogoEntity(assets.titleModels[1], [def.x, def.y, def.z], 0, def.scale ?? 0.2, false);
+		result.makeReflective();
+		result.startZ = def.z;
+		return result;
+	},
+	function spawnGameName(def, assets){ // 26
+		class WobbleEntity extends Entity{
+			t = 0;
+			override update(dt : number){
+				this.t = (this.t + dt * 1.8) % MathConstants.TAU;
+				this.rotation = 0.3 + Math.sin(this.t) * 0.3;
+				this.updateMatrix();
+			}
+		}
+		const result = new WobbleEntity(assets.titleModels[0], [def.x, def.y, def.z], 0, def.scale ?? 1, false);
+		result.rotX = -0.3;
+		result.makeReflective();
+		return result;
+	},
+	function spawnTitleBackround(def, assets){ //27
+		class TitleBackgroundEntity extends Entity {
+			override checkVisible(frustum: Frustum): boolean {
+				return true;
+			}
+			override update(dt : number){
+				this.position[0] -= dt * 65;
+				while (this.position[0] < -600*2.6){
+					this.position[0] += 300*2.6*3
+				}
+				this.updateMatrix();
+			}
+		}
+		return new TitleBackgroundEntity(assets.titleModels[2], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
 ];
 function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 	console.log("invalid object type", def);
@@ -1085,9 +1145,11 @@ type ProcessedAssets = Assets<StaticObject, AnimatedObject>;
 type SceneSettings = {
 	clearColour : GfxColor,
 	ambientColour : GfxColor,
-
 	lightDir : vec4,
 	lightColour : GfxColor,
+	cameraPos : vec3, // initial camera posiiton
+	cameraTarget? : vec3, // initial camera look at (or zero)
+	// todo: fog
 };
 
 
@@ -1107,6 +1169,8 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
 		this.sceneSettings = sceneSettings;
 
+		vec4.normalize(sceneSettings.lightDir, sceneSettings.lightDir);
+
 		cache.createModels(assets);
 
 		if (cache.assets.terrainModel)
@@ -1123,6 +1187,9 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		}
 	}
 
+	getDefaultWorldMatrix(out : mat4){
+		mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
+	}	
 
 	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput){
 		const renderInst = this.renderHelper.pushTemplateRenderInst();
@@ -1219,6 +1286,7 @@ type Assets<MeshType, SkeletonType> = {
 	globalModels : MeshType[][],
 	level1Models : MeshType[][],
 	menuModels : MeshType[][],
+	titleModels : MeshType[][],
 	terrainModel? : MeshType,
 	skeletons : {
 		[String in typeof SkeletonNames[number]]? : SkeletonType
@@ -1246,6 +1314,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			globalModels : [],
 			level1Models : [],
 			menuModels : await menuModelsPromise,
+			titleModels : [],
 			skeletons : {
 				Deinon : await playerSkeletonPromise
 			}
@@ -1256,25 +1325,65 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
 			lightDir : [-1, 0.7, 1, 0],
 			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			cameraPos : [0, 0, 600],
 		};
-		vec4.normalize(settings.lightDir, settings.lightDir);
 
 		return new NanosaurSceneRenderer(device, context, assets, createMenuObjectList(), settings);
 	}
 
-	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+	async createLogoScene(device : GfxDevice, context : SceneContext) : Promise<NanosaurSceneRenderer>{
+		const titleModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Title.3dmf").then(parseQd3DMeshGroup);
+		const assets : RawAssets = {
+			globalModels : [],
+			level1Models : [],
+			menuModels : [],
+			titleModels : await titleModelsPromise,
+			skeletons : {}
+		}
+		
+		const settings : SceneSettings = {
+			clearColour : {r:0, g:0, b:0, a:1},
+			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
+			lightDir : [-1, 0.7, 1, 0],
+			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			cameraPos : [0, 0, 70],
+		};
+		
+		return new NanosaurSceneRenderer(device, context, assets, createLogoObjectList(), settings);
+	}
+	async createTitleScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
+		const titleModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Title.3dmf").then(parseQd3DMeshGroup);
+		const rexPromise = this.loadSkeleton(context.dataFetcher, "Rex");
+		const assets : RawAssets = {
+			globalModels : [],
+			level1Models : [],
+			menuModels : [],
+			titleModels : await titleModelsPromise,
+			skeletons : {
+				Rex : await rexPromise
+			}
+		}
+		
+		const settings : SceneSettings = {
+			clearColour : {r:1, g:1, b:1, a:1},
+			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
+			lightDir : [-1, 0.7, 1, 0],
+			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			cameraPos : [110, 90, 190],
+		};
+		
+		return new NanosaurSceneRenderer(device, context, assets, createTitleObjectList(), settings);
+	}
 
-		if (this.levelName === "MainMenu")
-			return this.createMenuScene(device, context);
 
+	async createGameScene(device : GfxDevice, context : SceneContext, levelName : string) : Promise<Viewer.SceneGfx> {
 		const terrainPromise = Promise.all([
-			context.dataFetcher.fetchData(`${pathBase}/terrain/${this.levelName}.ter`),
+			context.dataFetcher.fetchData(`${pathBase}/terrain/${levelName}.ter`),
 			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
 		]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture));
 		
 		const globalModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Global_Models.3dmf")
 			.then(parseQd3DMeshGroup);
-
 		const level1ModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Level1_Models.3dmf")
 			.then(parseQd3DMeshGroup);
 
@@ -1291,6 +1400,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			globalModels : await globalModelsPromise,
 			level1Models : await level1ModelsPromise,
 			menuModels : [],
+			titleModels : [],
 			terrainModel,
 			skeletons,
 		}
@@ -1300,10 +1410,25 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			ambientColour: {r:0.2, g:0.2, b:0.2, a:1.0},
 			lightDir : [-1, 0.7, 1, 0],
 			lightColour : {r:1.2, g:1.2, b:1.2, a:1},
+			cameraPos : [4795, 493, 15280],
+			cameraTarget : [4795, 406, 14980],
 		};
-		vec4.normalize(settings.lightDir, settings.lightDir);
 
 		return new NanosaurSceneRenderer(device, context, assets, objectList, settings);
+	}
+
+	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+
+		switch(this.levelName){
+			case "Logo":
+				return this.createLogoScene(device, context);
+			case "Title":
+				return this.createTitleScene(device, context);
+			case "MainMenu":
+				return this.createMenuScene(device, context);
+			default:
+				return this.createGameScene(device, context, this.levelName);
+		}
 	}
 	
 }
@@ -1311,9 +1436,11 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 const id = "nanosaur";
 const name = "Nanosaur";
 const sceneDescs = [
+	new NanosaurSceneDesc("logo", "Logo", "Logo"),
+	new NanosaurSceneDesc("title", "Title", "Title"),
+	new NanosaurSceneDesc("mainmenu", "Main Menu", "MainMenu"),
 	new NanosaurSceneDesc("level1", "Level 1", "Level1"),
 	new NanosaurSceneDesc("level1Extreme", "Level 1 (Extreme)", "Level1Pro"),
-	new NanosaurSceneDesc("mainmenu", "Main Menu", "MainMenu"),
 ];
 
 

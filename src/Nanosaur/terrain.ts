@@ -35,6 +35,11 @@ export const enum ObjectType {
 	InfoIcon,
 	QuitIcon,
 	HighScoresIcon,
+	// title hack items,
+	TitlePangeaLogo,
+	TitleGameName,
+	TitleBackground,
+
 }
 
 export type LevelObjectDef = {
@@ -82,6 +87,55 @@ export function createMenuObjectList() : LevelObjectDef[] {
 	result[1].scale = 0.8;
 	result[1].rot! += Math.PI / 2;
 	result[1].param0 = 1; // animation hack
+	return result;
+}
+export function createLogoObjectList() : LevelObjectDef[] {
+	return [
+		{ // logo
+			x : 0,
+			y : 0,
+			z : -300,
+			type : ObjectType.TitlePangeaLogo,
+			param0 : 0,
+			param3 : 0,
+			rot : 0,
+			scale : 0.2,
+		},
+	]
+}
+export function createTitleObjectList() : LevelObjectDef[]{
+	const result : LevelObjectDef[] = [
+		{ // rex
+			x : 10,
+			y : 0,
+			z : 70,
+			type : ObjectType.Rex,
+			param0 : 1, // hack anim type
+			param3 : 0,
+			rot : Math.PI * -0.5,
+			scale : 0.5,
+		},{ // title text
+			x : 60,
+			y : 15,
+			z : 100,
+			type : ObjectType.TitleGameName,
+			param0 : 0,
+			param3 : 0,
+			rot : 0.9,
+			scale : 0.4,
+		},
+	];
+	for (let i = 0; i < 3; ++i){
+		result.push({ // background
+			x : -600 * 2.6 + i * 300*2.6,
+			y : 0,
+			z : -40,
+			type : ObjectType.TitleBackground,
+			param0 : 0,
+			param3 : 0,
+			scale : 2.6,
+		});
+	}
 	return result;
 }
 
