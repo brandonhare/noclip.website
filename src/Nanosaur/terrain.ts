@@ -81,6 +81,7 @@ export function createMenuObjectList() : LevelObjectDef[] {
 	result[1].type = ObjectType.Player;
 	result[1].scale = 0.8;
 	result[1].rot! += Math.PI / 2;
+	result[1].param0 = 1; // animation hack
 	return result;
 }
 

@@ -28,10 +28,12 @@ import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { MathConstants, quatFromEulerRadians } from "../MathHelpers";
-import { AABB } from "../Geometry";
+import { AABB, Frustum } from "../Geometry";
 import { CullMode } from "../gx/gx_enum";
 import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
 import { parseAppleDouble } from "./AppleDouble";
+import { mat4PostTranslate } from "../StarFoxAdventures/util";
+import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 
 const pathBase = "nanosaur";
 
@@ -41,9 +43,13 @@ class Program extends DeviceProgram {
 	static a_Colours = 2;
 	static a_Normals = 3;
 	static a_TextureIds = 4;
+	static a_BoneIds = 5;
+
+	static Max_Bones = 20;
 
 	static ub_SceneParams = 0;
 	static ub_DrawParams = 1;
+	static ub_Bones = 2;
 
 	constructor(flags : RenderFlags){
 		super();
@@ -54,6 +60,7 @@ class Program extends DeviceProgram {
 		this.setDefineBool("TEXTURE_HAS_ALPHA", (flags & RenderFlags.TextureHasAlpha) !== 0);
 		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
 		this.setDefineBool("SCROLL_UVS", (flags & RenderFlags.ScrollUVs) !== 0);
+		this.setDefineBool("SKINNED", (flags & RenderFlags.Skinned) !== 0);
 		this.setDefineBool("REFLECTIVE", (flags & RenderFlags.Reflective) !== 0);
 	}
 
@@ -79,6 +86,11 @@ layout(std140) uniform ub_DrawParams {
 	vec2 u_UVScroll;
 	#endif
 };
+#ifdef SKINNED
+layout(std140) uniform ub_Bones {
+	Mat4x3 u_Bones[${Program.Max_Bones}];
+};
+#endif
 `;
 	override vert = 
 `
@@ -87,6 +99,7 @@ layout(location = ${Program.a_UVs}) in vec2 a_UV;
 layout(location = ${Program.a_Normals}) in vec3 a_Normal;
 layout(location = ${Program.a_Colours}) in vec3 a_Colour;
 layout(location = ${Program.a_TextureIds}) in float a_TextureId;
+layout(location = ${Program.a_BoneIds}) in float a_BoneId;
 
 out vec4 v_Colour;
 out vec3 v_Normal;
@@ -97,19 +110,31 @@ ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
 	v_Colour = vec4(a_Colour, 1.0);
-	v_Normal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, a_Normal));
 	v_UV = a_UV;
 	#ifdef TILEMAP
 		v_UV = a_Position.xz;
 		v_Id = int(a_TextureId);
 	#endif
 
-	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(a_Position, 1.0));
+	vec3 pos = a_Position;
+	vec3 normal = a_Normal;
+
+	#ifdef SKINNED
+		int boneId = int(a_BoneId);
+
+		pos = Mul(u_Bones[boneId], vec4(pos, 1.0));
+		//normal = normalize(MulNormalMatrix(u_Bones[boneId.y], normal));
+		normal = Mul(u_Bones[boneId], vec4(normal, 0.0));
+	#endif
+	
+	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(pos, 1.0));
+	vec3 worldNormal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, normal));
 
 	#ifdef REFLECTIVE
-		v_UV = normalize(reflect(u_CameraPos.xyz - worldPos, v_Normal)).xy * 0.5 + 0.5;
+		v_UV = normalize(reflect(u_CameraPos.xyz - worldPos, worldNormal)).xy * 0.5 + 0.5;
 	#endif
 
+	v_Normal = worldNormal;
     gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
 }
 `;
@@ -349,7 +374,8 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 }
 
 const enum RenderFlags {
-	Translucent		 = 0x20000,
+	Translucent		 = 0x40000,
+	Skinned			 = 0x20000,
 	Reflective       = 0x10000,
 	DrawBackfacesSeparately = 0x8000,
 	KeepBackfaces    = 0x4000,
@@ -423,6 +449,7 @@ class StaticObject implements Destroyable {
 		const hasNormals = pushBuffer(mesh.normals?.buffer, 12, Program.a_Normals, GfxFormat.F32_RGB);
 		const hasColours = pushBuffer(mesh.vertexColours?.buffer, 12, Program.a_Colours, GfxFormat.F32_RGB);
 		const hasTilemap = pushBuffer(mesh.tilemapIds?.buffer, 2, Program.a_TextureIds, GfxFormat.U16_R);
+		const isSkinned = pushBuffer(mesh.boneIds?.buffer, 1, Program.a_BoneIds, GfxFormat.U8_R);
 
 		if (!hasNormals)
 			this.renderFlags |= RenderFlags.Unlit; // no lighting without normals
@@ -433,6 +460,9 @@ class StaticObject implements Destroyable {
 		if (this.colour.a < 1){
 			this.renderFlags |= RenderFlags.Translucent;
 		}
+
+		if (isSkinned)
+			this.renderFlags |= RenderFlags.Skinned;
 
 		const texture = mesh.texture;
 		if (texture){
@@ -468,12 +498,6 @@ class StaticObject implements Destroyable {
 	}
 	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity, flipBackfaces = false): void {
         const renderInst = renderInstManager.newRenderInst();
-		/*
-        renderInst.setBindingLayouts([{
-			numUniformBuffers : 2,
-			numSamplers : 1,
-		}]);
-		*/
 
 		const renderFlags = this.renderFlags | entity.extraRenderFlags;
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
@@ -625,12 +649,11 @@ class Entity {
 		this.aabb.transform(this.aabb, this.modelMatrix);
 	}
 
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
+	checkVisible(frustum : Frustum){
+		return frustum.contains(this.aabb);
+	}
 
-		if (!viewerInput.camera.frustum.contains(this.aabb)){
-			return;
-		}
-		
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
 		for (const mesh of this.meshes)
 			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 	}
@@ -641,13 +664,70 @@ class Entity {
 class AnimatedEntity extends Entity{
 	animationController : AnimationController;
 
-	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number){
-		super(mesh.meshes, position, rotation, scale, true);
+	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number, pushUp : boolean, startAnim : number){
+		super(mesh.meshes, position, rotation, scale, pushUp);
 		this.animationController = new AnimationController(mesh.animationData);
+		this.animationController.currentAnimation = startAnim;
+		this.animationController.setRandomTime();
 	}
 
 	override update(dt : number) : void {
 		this.animationController.update(dt);
+		// todo: update bbox?
+	}
+
+	setAnimation(animationIndex : number, animationSpeed : number){
+		this.animationController.setAnimation(animationIndex, animationSpeed);
+	}
+
+	debugDrawSkeleton(clipFromWorldMatrix : mat4){
+		
+		const bones = this.animationController.animation.bones;
+		const transforms = this.animationController.boneTransforms;
+		const c = getDebugOverlayCanvas2D();
+		const p1 : vec3 = [0,0,0];
+		const p2 : vec3 = [0,0,0];
+
+		for (let i = 0; i < bones.length; ++i){
+			const parentIndex = bones[i].parent;
+			if (parentIndex < 0)
+				continue;
+			
+			mat4.getTranslation(p1, transforms[i]);
+			vec3.transformMat4(p1, p1, this.modelMatrix);
+
+			mat4.getTranslation(p2, transforms[parentIndex]);
+			vec3.transformMat4(p2, p2, this.modelMatrix);
+
+			drawWorldSpaceLine(c, clipFromWorldMatrix, p1, p2);
+		}
+	}
+
+	override prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
+
+		if (!viewerInput.camera.frustum.contains(this.aabb)){
+			return;
+		}
+
+		//this.debugDrawSkeleton(viewerInput.camera.clipFromWorldMatrix);
+
+		const renderInst = renderInstManager.pushTemplateRenderInst();
+		
+		renderInst.setBindingLayouts([{
+			numUniformBuffers : 3,
+			numSamplers : 1,
+		}]);
+		
+		const numTransforms = this.animationController.boneTransforms.length;
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_Bones, Program.Max_Bones * 4*3);
+		const uniformData = renderInst.mapUniformBufferF32(Program.ub_Bones);
+		for (let i = 0; i < numTransforms; ++i)
+			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, this.animationController.boneTransforms[i]);
+
+		for (const mesh of this.meshes)
+			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
+
+		renderInstManager.popTemplateRenderInst();
 	}
 }
 
@@ -674,12 +754,16 @@ class UndulateEntity extends Entity {
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
 	// todo: animate, mesh, push up?
-	return new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2);
+	return new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, false, 1);
 };
 const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
-		// todo animate, shadow
-		return new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1);
+		// todo shadow
+		const mainMenu = def.param0; // main menu hack
+		const result = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, !mainMenu, mainMenu);
+		if (mainMenu)
+			result.animationController.t = 0;
+		return result;
 	},
 	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
@@ -687,12 +771,12 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		assert(type >= 0 && type <= 6, "powerup type out of range");
 		// todo: y pos quick
 		// todo darken shadow?
-		return new SpinningEntity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], 0, 1, false);
+		return new SpinningEntity(assets.globalModels[meshIndices[type]], [def.x, def.y + 0.5, def.z], null, 1, false);
 	},
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
-		// todo: animate, mesh, push up, rotation, shadow (for eveerything)
-		return new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], null, 1.2);
+		// todo: rotation, shadow (for eveerything)
+		return new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], null, 1.2, false, 0);
 	},
 	function spawnLava(def, assets){ // 4
 
@@ -751,7 +835,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		}
 
 		class LavaEntity extends UndulateEntity {
-			fireballTimer = 0;
+			fireballTimer = Math.random() * 0.4;
 			override update(dt : number) : FireballEntity | void {
 				super.update(dt);
 				this.fireballTimer += dt;
@@ -785,13 +869,13 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		result.baseScale = 0.501;
 		result.amplitude = 0.5;
 		result.period = 2.0;
-		result.t = 1;
+		//result.t = 1;
 		return result;
 	},
 	function spawnEgg(def, assets){ // 5
 		const eggType = def.param0;
 		assert(eggType < 5, "egg type out of range");
-		const egg = new Entity(assets.level1Models[3 + eggType], [def.x, def.y - 5, def.z], null, 0.6, true);
+		const egg = new Entity(assets.level1Models[3 + eggType], [def.x, def.y, def.z], null, 0.6, true);
 		if (def.param3 & 1){
 			// make nest
 			const nest = new Entity(assets.level1Models[15], [def.x, def.y, def.z], 0, 1, false);
@@ -815,8 +899,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnPteranodon(def, assets){ // 7
 		// todo fly and stuff
-		const ptera = new AnimatedEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1)
-		if (def.param3 & (1<<1)) {
+		const hasRock = (def.param3 & (1<<1)) !== 0;
+		const ptera = new AnimatedEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1, false, hasRock ? 2 : 0)
+		if (hasRock) {
 			// todo attach
 			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
 			return [rock, ptera];
@@ -824,7 +909,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return ptera;
 	},
 	function spawnStegosaurus(def, assets){ // 8
-		return new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4);
+		return new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, true, 1);
 	},
 	function spawnTimePortal(def, assets){ // 9
 		class TimePortalRingEntity extends Entity {
@@ -895,7 +980,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		const result = new UndulateEntity(assets.level1Models[2], [x,y,z], 0, 2, false);
 		result.makeTranslucent(0.8, false, true);
 		result.scrollUVs([-0.04, 0.08]);
-		result.t = 1;
+		//result.t = 1;
 		result.period = 3;
 		result.amplitude = 0.5;
 		result.baseScale = 0.501;
@@ -912,7 +997,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
-		return new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8);
+		return new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, false, 0);
 	},
 	function spawnStepStone(def, assets){ // 17
 		// todo: quick y
@@ -1064,23 +1149,29 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		uniformData[uniformOffset] = viewerInput.time * 0.001;
 		uniformOffset += 1;
 
+        const renderInstManager = this.renderHelper.renderInstManager;
 
-		const dt = viewerInput.deltaTime * 0.001;
+		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
 		for (let i = 0; i < this.entities.length; ++i){
-			const result : EntityUpdateResult = this.entities[i].update(dt);
+			const entity = this.entities[i];
+			const visible = entity.checkVisible(viewerInput.camera.frustum);
+			if (!visible)
+				continue; // todo: update some entities while not visible (eg. lava fireballs)
+
+			const result : EntityUpdateResult = entity.update(dt);
 			if (result === false){
-				// destroy this enetity
+				// destroy this entity
 				this.entities.splice(i, 1);
 				--i;
-			} else if (result){
+				continue;
+			}
+			if (result){
 				// created new entity
 				this.entities.push(result);
 			}
-		}
 
-        const renderInstManager = this.renderHelper.renderInstManager;
-        for (let i = 0; i < this.entities.length; i++)
-            this.entities[i].prepareToRender(device, renderInstManager, viewerInput, this.cache);
+			entity.prepareToRender(device, renderInstManager, viewerInput, this.cache);
+		}
 			
         renderInstManager.popTemplateRenderInst();
         this.renderHelper.prepareToRender();

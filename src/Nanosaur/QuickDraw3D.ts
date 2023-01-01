@@ -22,6 +22,7 @@ export type Qd3DMesh = {
 	normals?: Float32Array; // xyz
 	vertexColours?: Float32Array; // rgb
 	tilemapIds? : Uint16Array;
+	boneIds? : Uint8Array,
 };
 
 export type Qd3DTexture = {
