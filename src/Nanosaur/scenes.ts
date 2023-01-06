@@ -2,7 +2,7 @@
 import * as Viewer from '../viewer';
 import * as UI from "../ui";
 
-import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode } from "../gfx/platform/GfxPlatform";
+import { GfxBuffer, GfxBufferUsage, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxVertexBufferFrequency, GfxInputLayoutBufferDescriptor, GfxInputLayoutDescriptor, GfxInputState, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxWrapMode, GfxProgram, GfxProgramDescriptorSimple, GfxColor, GfxBlendFactor, GfxBlendMode, GfxSampler, makeTextureDescriptor2D, GfxTexture, GfxCullMode, GfxTexFilterMode, GfxMipFilterMode, GfxTextureUsage, GfxTextureDimension, GfxCompareMode, GfxSamplerFormatKind } from "../gfx/platform/GfxPlatform";
 import { Destroyable, GraphObjBase, SceneContext } from "../SceneBase";
 import { GfxRenderHelper } from '../gfx/render/GfxRenderHelper';
 
@@ -23,7 +23,7 @@ import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup } from "./QuickDraw3D";
-import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList } from "./terrain";
+import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList, ObjectType } from "./terrain";
 import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
@@ -505,6 +505,19 @@ class StaticObject implements Destroyable {
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
 		const gfxProgram = cache.getProgram(renderFlags);
+		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
+		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
+
+		if (!hasTexture || textureArray){
+			renderInst.setBindingLayouts([{
+				numUniformBuffers : (renderFlags & RenderFlags.Skinned) ? 3 : 2,
+				numSamplers : hasTexture ? 1 : 0,
+				samplerEntries : textureArray ? [{
+					dimension : GfxTextureDimension.n2DArray,
+					formatKind : GfxSamplerFormatKind.Float,
+				}] : undefined
+			}]);
+		}
 
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
