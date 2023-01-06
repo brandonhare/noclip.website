@@ -86,6 +86,7 @@ import * as Scenes_Glover from './Glover/scenes';
 import * as Scenes_HalfLife from './GoldSrc/Scenes_HalfLife';
 import * as Scenes_SuperMonkeyBall from './SuperMonkeyBall/Scenes_SuperMonkeyBall';
 import * as Scenes_Nanosaur from "./PangeaSoft/nanosaur_scenes";
+import * as Scenes_Bugdom from "./PangeaSoft/bugdom_scenes";
 
 import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_FileDrops';
 
@@ -206,6 +207,7 @@ const sceneGroups = [
     Scenes_Subnautica.sceneGroup,
     Scenes_HalfLife.sceneGroup,
     Scenes_Nanosaur.sceneGroup,
+    Scenes_Bugdom.sceneGroup,
 ];
 
 function convertCanvasToPNG(canvas: HTMLCanvasElement): Promise<Blob> {

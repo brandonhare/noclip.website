@@ -14,10 +14,10 @@ export type LevelObjectDef = {
 	z : number,
 	type : number,
 	param0 : number,
-	//param1 : number, // unused
-	//param2 : number, // unused
+	param1? : number, // unused
+	param2? : number, // unused
 	param3 : number,
-	//flags : number,  // unused
+	flags? : number,  // unused
 
 	// main menu hack
 	rot? : number,
