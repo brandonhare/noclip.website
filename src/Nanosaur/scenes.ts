@@ -608,6 +608,7 @@ class Entity {
 	aabb : AABB = new AABB();
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	extraRenderFlags : RenderFlags = 0;
+	alwaysUpdate = false;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
 		if (!Array.isArray(meshes))
@@ -936,6 +937,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		class TimePortalRingEntity extends Entity {
 			startY = 0;
 			t = 0;
+			override alwaysUpdate = true;
 			override update(dt : number){
 				this.t = (this.t + dt) % 2.7;
 				if (this.t <= 0.8){
@@ -1101,9 +1103,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		class LogoEntity extends Entity {
 			t = 0;
 			startZ = 0;
-			override checkVisible(frustum: Frustum): boolean {
-				return true;
-			}
+			override alwaysUpdate = true;
 			override update(dt: number): EntityUpdateResult {
 				this.t = (this.t + dt) % 10;
 				this.position[2] = this.startZ + this.t * 45;
@@ -1135,9 +1135,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnTitleBackround(def, assets){ //27
 		class TitleBackgroundEntity extends Entity {
-			override checkVisible(frustum: Frustum): boolean {
-				return true;
-			}
+			override alwaysUpdate = true;
 			override update(dt : number){
 				this.position[0] -= dt * 65;
 				while (this.position[0] < -600*2.6){
@@ -1235,8 +1233,9 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		for (let i = 0; i < this.entities.length; ++i){
 			const entity = this.entities[i];
 			const visible = entity.checkVisible(viewerInput.camera.frustum);
-			if (!visible)
-				continue; // todo: update some entities while not visible (eg. lava fireballs)
+
+			if (!visible && !entity.alwaysUpdate)
+				continue;
 
 			const result : EntityUpdateResult = entity.update(dt);
 			if (result === false){
@@ -1250,7 +1249,8 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 				this.entities.push(result);
 			}
 
-			entity.prepareToRender(device, renderInstManager, viewerInput, this.cache);
+			if (visible)
+				entity.prepareToRender(device, renderInstManager, viewerInput, this.cache);
 		}
 			
         renderInstManager.popTemplateRenderInst();
