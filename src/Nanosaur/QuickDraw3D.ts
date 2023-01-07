@@ -33,7 +33,7 @@ export type Qd3DTexture = {
 	hasAlpha : boolean;
 	wrapU : GfxWrapMode;
 	wrapV : GfxWrapMode;
-	pixels: Uint16Array | Uint8Array;
+	pixels: Uint16Array | Uint8Array | Uint8ClampedArray;
 };
 
 // converts U16_RGBA_1555 pixels to U16_RGBA_5551
@@ -72,6 +72,34 @@ function addEdgePadding(pixels : Uint16Array, width : number, height : number){
 			}
 		}
 	}
+}
+
+export function loadTextureFromImage(urlPath : string) : Promise<Qd3DTexture>{
+	const img = document.createElement("img");
+	//img.crossOrigin = "anonymous";
+	img.src = urlPath;
+	return new Promise((resolve, err)=>{
+		img.onerror = err;
+		img.onload = ()=>{
+			const canvas = document.createElement("canvas");
+			canvas.width = img.width;
+			canvas.height = img.height;
+			const ctx = canvas.getContext("2d")!;
+			ctx.drawImage(img, 0, 0);
+			const pixels = ctx.getImageData(0, 0, img.width, img.height);
+
+			resolve({
+				width : img.width,
+				height : img.height,
+				numTextures : 1,
+				pixelFormat : GfxFormat.U8_RGBA_NORM,
+				hasAlpha : false,
+				wrapU : GfxWrapMode.Clamp,
+				wrapV : GfxWrapMode.Clamp,
+				pixels: pixels.data
+			});
+		}
+	});
 }
 
 export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{

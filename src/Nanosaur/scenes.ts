@@ -22,7 +22,7 @@ import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorH
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup } from "./QuickDraw3D";
+import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, loadTextureFromImage } from "./QuickDraw3D";
 import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList, ObjectType } from "./terrain";
 import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
@@ -347,6 +347,11 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			terrainModel : rawAssets.terrainModel && new StaticObject(device, this, rawAssets.terrainModel),
 			skeletons,
 		}
+
+		// fixup shadow model
+		const shadowModel = this.assets.globalModels[1][0];
+		shadowModel.renderFlags |= RenderFlags.Translucent;
+		//shadowModel.colour.r = shadowModel.colour.g = shadowModel.colour.b = 0;
 	}
 	destroyModels(){
 		const device = this.device;
@@ -609,6 +614,7 @@ class Entity {
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	extraRenderFlags : RenderFlags = 0;
 	alwaysUpdate = false;
+	shadow? : ShadowEntity = undefined;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
 		if (!Array.isArray(meshes))
@@ -663,6 +669,8 @@ class Entity {
 			this.aabb.union(this.aabb, mesh.aabb);
 		}
 		this.aabb.transform(this.aabb, this.modelMatrix);
+
+		this.shadow?.updateShadow(this);
 	}
 
 	checkVisible(frustum : Frustum){
@@ -675,6 +683,24 @@ class Entity {
 	}
 	
 	update(dt : number) : EntityUpdateResult {}
+}
+
+class ShadowEntity extends Entity {
+	baseScaleX = 1;
+	baseScaleZ = 1;
+	constructor(assets : ProcessedAssets, parent : Entity, scaleX = parent.scale[0], scaleZ = parent.scale[2]){
+		super(assets.globalModels[1], vec3.clone(parent.position), parent.rotation, 1, false);
+		this.baseScaleX = scaleX;
+		this.baseScaleZ = scaleZ;
+		this.scale[0] = scaleX;
+		this.scale[2] = scaleZ;
+		this.position[1] += 0.5;
+		this.updateShadow(parent);
+	}
+	updateShadow(parent : Entity){
+		// todo: project onto terrain
+		this.updateMatrix();
+	}
 }
 
 class AnimatedEntity extends Entity{
@@ -769,17 +795,19 @@ class UndulateEntity extends Entity {
 }
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
-	// todo: animate, mesh, push up?
-	return new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, false, 1);
+	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, false, 1);
+	return [result, new ShadowEntity(assets, result, 2.7, 2.7*1.5)];
 };
 const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
-		// todo shadow
 		const mainMenu = def.param0; // main menu hack
-		const result = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, !mainMenu, mainMenu);
-		if (mainMenu)
-			result.animationController.t = 0;
-		return result;
+		const player = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, !mainMenu, mainMenu);
+		if (mainMenu){
+			player.animationController.t = 0;
+			return player;
+		} else {
+			return [player, new ShadowEntity(assets, player, 0.9, 0.9*2.5)];
+		}
 	},
 	function spawnPowerup(def, assets){ // 1
 		const meshIndices = [11, 12, 14, 15, 16, 17, 18];
@@ -791,14 +819,15 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
-		// todo: rotation, shadow (for eveerything)
+		// todo: rotation
 		const title = def.param0 === 1; // title hack
-		const result = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, false, title ? 1 : 0);
+		const rex = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, false, title ? 1 : 0);
+
 		if (title) {
-			result.animationController.t = 0;
-			result.animationController.animSpeed = 0.8;
+			rex.animationController.t = 0;
+			rex.animationController.animSpeed = 0.8;
 		}
-		return result;
+		return [rex, new ShadowEntity(assets, rex, 2.6, 2.6*2.5)];
 	},
 	function spawnLava(def, assets){ // 4
 
@@ -923,15 +952,17 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		// todo fly and stuff
 		const hasRock = (def.param3 & (1<<1)) !== 0;
 		const ptera = new AnimatedEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1, false, hasRock ? 2 : 0)
+		const result : Entity[] = [ptera, new ShadowEntity(assets, ptera, 4, 4.5)];
 		if (hasRock) {
 			// todo attach
 			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
-			return [rock, ptera];
+			result.push(rock);
 		}
-		return ptera;
+		return result;
 	},
 	function spawnStegosaurus(def, assets){ // 8
-		return new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, true, 1);
+		const stego = new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, true, 1);
+		return [stego, new ShadowEntity(assets, stego, 5, 5*2)];
 	},
 	function spawnTimePortal(def, assets){ // 9
 		class TimePortalRingEntity extends Entity {
@@ -989,8 +1020,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	function spawnBush(def, assets){ // 13
 		const bush = new Entity(assets.level1Models[11], [def.x, def.y, def.z], null, 4.2, true);
 		if (def.param3 & 1){
-			const triceratops = spawnTriceratops(def, assets);
-			return [bush, triceratops];
+			const result : Entity[] = spawnTriceratops(def, assets);
+			result.push(bush);
+			return result;
 		}
 		return bush;
 	},
@@ -1020,7 +1052,8 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
-		return new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, false, 0);
+		const spitter = new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, false, 0);
+		return [spitter, new ShadowEntity(assets, spitter, 1.6, 1.6*2.5)];
 	},
 	function spawnStepStone(def, assets){ // 17
 		// todo: quick y
@@ -1402,6 +1435,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 		const skeletonPromises = SkeletonNames.map((name)=>this.loadSkeleton(context.dataFetcher, name))
 
+		const shadowTexturePromise = loadTextureFromImage(context.dataFetcher.getDataURLForPath(pathBase + "/Images/Shadow.png"));
+
 		const [terrainModel, objectList] = await terrainPromise;
 
 		const skeletons : any = {};
@@ -1409,8 +1444,12 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			skeletons[SkeletonNames[i]] = await skeletonPromises[i];
 		}
 
+		// fixup shadow texture
+		const globalModels = await globalModelsPromise;
+		globalModels[1][0].texture = await shadowTexturePromise;		
+
 		const assets : RawAssets = {
-			globalModels : await globalModelsPromise,
+			globalModels : globalModels,
 			level1Models : await level1ModelsPromise,
 			menuModels : [],
 			titleModels : [],
