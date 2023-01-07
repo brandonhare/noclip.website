@@ -23,7 +23,7 @@ import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, loadTextureFromImage } from "./QuickDraw3D";
-import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList, ObjectType } from "./terrain";
+import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList, ObjectType, createHighScoresObjectList } from "./terrain";
 import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
 import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
@@ -344,14 +344,15 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			level1Models : make(rawAssets.level1Models),
 			menuModels : make(rawAssets.menuModels),
 			titleModels : make(rawAssets.titleModels),
+			highScoresModels : make(rawAssets.highScoresModels),
 			terrainModel : rawAssets.terrainModel && new StaticObject(device, this, rawAssets.terrainModel),
 			skeletons,
 		}
 
+		
 		// fixup shadow model
-		const shadowModel = this.assets.globalModels[1][0];
-		shadowModel.renderFlags |= RenderFlags.Translucent;
-		//shadowModel.colour.r = shadowModel.colour.g = shadowModel.colour.b = 0;
+		if (this.assets.globalModels[1])
+			this.assets.globalModels[1][0].renderFlags |= RenderFlags.Translucent;
 	}
 	destroyModels(){
 		const device = this.device;
@@ -363,6 +364,7 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		destroyModels(this.assets.globalModels);
 		destroyModels(this.assets.level1Models);
 		destroyModels(this.assets.titleModels);
+		destroyModels(this.assets.highScoresModels);
 		for (const name of SkeletonNames){
 			this.assets.skeletons[name]?.destroy(device);
 		}
@@ -617,8 +619,10 @@ class Entity {
 	shadow? : ShadowEntity = undefined;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
-		if (!Array.isArray(meshes))
+		if (!Array.isArray(meshes)){
+			assert(meshes != undefined, "invalid mesh for entity");
 			meshes = [meshes];
+		}
 		this.meshes = meshes;
 
 		if (rotation === null)
@@ -1179,6 +1183,19 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		}
 		return new TitleBackgroundEntity(assets.titleModels[2], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
 	},
+	// high scores stuff
+	function spawnSpiral(def, assets) { // 28
+		class SpiralEntity extends Entity {
+			override update(dt: number): EntityUpdateResult {
+				this.rotX += dt * 1.5;
+				this.updateMatrix();
+			}
+		}
+		return new SpiralEntity(assets.highScoresModels[45], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
+	},
+	function spawnLetter(def, assets) { //29 
+		return new Entity(assets.highScoresModels[def.param0], [def.x, def.y, def.z], 0, 1, false);
+	},
 ];
 function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
 	console.log("invalid object type", def);
@@ -1333,6 +1350,7 @@ type Assets<MeshType, SkeletonType> = {
 	level1Models : MeshType[][],
 	menuModels : MeshType[][],
 	titleModels : MeshType[][],
+	highScoresModels : MeshType[][],
 	terrainModel? : MeshType,
 	skeletons : {
 		[String in typeof SkeletonNames[number]]? : SkeletonType
@@ -1350,7 +1368,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData));
 	}
 
-	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
+	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<NanosaurSceneRenderer> {
 		
 		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface2.3dmf")
 			.then(parseQd3DMeshGroup);
@@ -1361,6 +1379,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			level1Models : [],
 			menuModels : await menuModelsPromise,
 			titleModels : [],
+			highScoresModels : [],
 			skeletons : {
 				Deinon : await playerSkeletonPromise
 			}
@@ -1384,6 +1403,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			level1Models : [],
 			menuModels : [],
 			titleModels : await titleModelsPromise,
+			highScoresModels : [],
 			skeletons : {}
 		}
 		
@@ -1397,7 +1417,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		
 		return new NanosaurSceneRenderer(device, context, assets, createLogoObjectList(), settings);
 	}
-	async createTitleScene(device : GfxDevice, context : SceneContext) : Promise<Viewer.SceneGfx> {
+
+	async createTitleScene(device : GfxDevice, context : SceneContext) : Promise<NanosaurSceneRenderer> {
 		const titleModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/Title.3dmf").then(parseQd3DMeshGroup);
 		const rexPromise = this.loadSkeleton(context.dataFetcher, "Rex");
 		const assets : RawAssets = {
@@ -1405,6 +1426,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			level1Models : [],
 			menuModels : [],
 			titleModels : await titleModelsPromise,
+			highScoresModels: [],
 			skeletons : {
 				Rex : await rexPromise
 			}
@@ -1421,8 +1443,34 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		return new NanosaurSceneRenderer(device, context, assets, createTitleObjectList(), settings);
 	}
 
+	async createHighScoresScene(device : GfxDevice, context : SceneContext) : Promise<NanosaurSceneRenderer> {
+		const highScoresModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/HighScores.3dmf").then(parseQd3DMeshGroup);
+		const assets : RawAssets = {
+			globalModels : [],
+			level1Models : [],
+			menuModels : [],
+			titleModels : [],
+			highScoresModels : await highScoresModelsPromise,
+			skeletons : {}
+		}
+		
+		const settings : SceneSettings = {
+			clearColour : {r:0, g:0, b:0, a:1},
+			ambientColour : {r:0.2, g:0.2, b:0.2, a:1.0},
+			lightDir : [-0.7, 0.1, 0.3, 0],
+			lightColour : {r:1,g:1,b:1,a:1},
+			cameraPos : [-110, -30, 90],
+		};
+		
+		const scores = [
+			"cool", 100,
+			"brandonhare", 50,
+		];
 
-	async createGameScene(device : GfxDevice, context : SceneContext, levelName : string) : Promise<Viewer.SceneGfx> {
+		return new NanosaurSceneRenderer(device, context, assets, createHighScoresObjectList(scores), settings);
+	}
+
+	async createGameScene(device : GfxDevice, context : SceneContext, levelName : string) : Promise<NanosaurSceneRenderer> {
 		const terrainPromise = Promise.all([
 			context.dataFetcher.fetchData(`${pathBase}/terrain/${levelName}.ter`),
 			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
@@ -1453,6 +1501,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			level1Models : await level1ModelsPromise,
 			menuModels : [],
 			titleModels : [],
+			highScoresModels : [],
 			terrainModel,
 			skeletons,
 		}
@@ -1469,7 +1518,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		return new NanosaurSceneRenderer(device, context, assets, objectList, settings);
 	}
 
-	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+	public async createScene(device: GfxDevice, context: SceneContext): Promise<NanosaurSceneRenderer> {
 
 		switch(this.levelName){
 			case "Logo":
@@ -1478,6 +1527,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 				return this.createTitleScene(device, context);
 			case "MainMenu":
 				return this.createMenuScene(device, context);
+			case "HighScores":
+				return this.createHighScoresScene(device, context);
 			default:
 				return this.createGameScene(device, context, this.levelName);
 		}
@@ -1492,7 +1543,8 @@ const sceneDescs = [
 	new NanosaurSceneDesc("title", "Title", "Title"),
 	new NanosaurSceneDesc("mainmenu", "Main Menu", "MainMenu"),
 	new NanosaurSceneDesc("level1", "Level 1", "Level1"),
-	new NanosaurSceneDesc("level1Extreme", "Level 1 (Extreme)", "Level1Pro"),
+	new NanosaurSceneDesc("level1extreme", "Level 1 (Extreme)", "Level1Pro"),
+	new NanosaurSceneDesc("highscores", "High Scores", "HighScores"),
 ];
 
 

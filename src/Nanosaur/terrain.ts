@@ -39,7 +39,9 @@ export const enum ObjectType {
 	TitlePangeaLogo,
 	TitleGameName,
 	TitleBackground,
-
+	// high score hack items
+	Spiral,
+	Letter,
 }
 
 export type LevelObjectDef = {
@@ -136,6 +138,78 @@ export function createTitleObjectList() : LevelObjectDef[]{
 			scale : 2.6,
 		});
 	}
+	return result;
+}
+export function createHighScoresObjectList(scores : (string | number)[]) : LevelObjectDef[]{
+	const result : LevelObjectDef[] = [
+		{
+			x : 0,
+			y : 0,
+			z : 0,
+			type : ObjectType.Spiral,
+			param0 : 0,
+			param3 : 0,
+			rot : 0,
+			scale : 4
+		}
+	];
+
+	const numScores = Math.max(scores.length, 16);
+	for (let i = 0; i < numScores; i += 2){
+		const name = scores[i] as string ?? "";
+		let score = scores[i + 1] as number ?? 0;
+		let x = 18 * (11+3) * i + 200;
+
+		// print name
+		for (let j = 0; j < name.length; ++j){
+			const code = name.charCodeAt(j);
+			let meshId : number;
+			if (code >= 48 && code <= 57) // 0-9
+				meshId = 1 + code - 48;
+			else if (code >= 65 && code <= 90) // A-Z
+				meshId = 11 + code - 65;
+			else if (code >= 97 && code <= 122) // a-z
+				meshId = 11 + code - 97;
+			else switch(code){
+				case 35: meshId = 38; break; // #
+				case 33: meshId = 40; break; // !
+				case 63: meshId = 39; break; // ?
+				case 39: meshId = 42; break; // '
+				case 46: meshId = 37; break; // .
+				case 58: meshId = 43; break; // :
+				case 45: meshId = 41; break; // -
+				default: continue; // space or unknown char
+			}
+
+			result.push({
+				x : x + j * 18,
+				y : 0,
+				z : 0,
+				type : ObjectType.Letter,
+				param0 : meshId,
+				param3 : 0,
+			});
+		}
+
+		x += 75;
+		// print score
+		let place = 0;
+		while (score > 0 || place < 4) {
+			const digit = score % 10;
+			score = Math.floor(score / 10);
+			const meshId = 1 + digit;
+			result.push({
+				x : x - (place * 18),
+				y : -25,
+				z : 0,
+				type : ObjectType.Letter,
+				param0 : meshId,
+				param3 : 0,
+			});
+			place += 1;
+		}
+	}
+
 	return result;
 }
 
