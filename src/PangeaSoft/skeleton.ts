@@ -1,9 +1,10 @@
-import { Qd3DMesh } from "./QuickDraw3D";
-import { assert, readString } from "../util";
-import { ResourceFork } from "./AppleDouble";
 import { mat4, quat, vec3 } from "gl-matrix";
 import { Endianness } from "../endian";
-import { lerp, clamp, invlerp, quatFromEulerRadians } from "../MathHelpers";
+import { clamp, invlerp, lerp, quatFromEulerRadians } from "../MathHelpers";
+import { assert, readString } from "../util";
+
+import { ResourceFork } from "./AppleDouble";
+import { Qd3DMesh } from "./QuickDraw3D";
 
 
 

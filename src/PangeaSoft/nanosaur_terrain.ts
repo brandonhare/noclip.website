@@ -4,51 +4,15 @@ import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
 import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
-import { MathConstants } from "../MathHelpers";
 import { assert } from "../util";
-import { Qd3DMesh, swizzle1555Pixels, Qd3DTexture, AlphaType } from "./QuickDraw3D";
 
-export const enum ObjectType {
-	Player,
-	Powerup,
-	Tricer,
-	Rex,
-	Lava,
-	Egg,
-	GasVent,
-	Ptera,
-	Stego,
-	TimePortal,
-	Tree,
-	Boulder,
-	Mushroom,
-	Bush,
-	WaterPatch,
-	Crystal,
-	Spitter,
-	StepStone,
-	RollingBoulder,
-	SporePod,
-	// main menu hack items
-	MenuBackground,
-	OptionsIcon,
-	InfoIcon,
-	QuitIcon,
-	HighScoresIcon,
-	// title hack items,
-	TitlePangeaLogo,
-	TitleGameName,
-	TitleBackground,
-	// high score hack items
-	Spiral,
-	Letter,
-}
+import { AlphaType, Qd3DMesh, Qd3DTexture, swizzle1555Pixels } from "./QuickDraw3D";
 
 export type LevelObjectDef = {
 	x : number,
 	y : number, // terrain height
 	z : number,
-	type : ObjectType,
+	type : number,
 	param0 : number,
 	//param1 : number, // unused
 	//param2 : number, // unused
@@ -59,159 +23,6 @@ export type LevelObjectDef = {
 	rot? : number,
 	scale? : number,
 };
-
-export function createMenuObjectList() : LevelObjectDef[] {
-	
-	const result : LevelObjectDef[] = [
-		{
-			type : ObjectType.MenuBackground,
-			x : 0,
-			y : 0,
-			z : 0,
-			param0:0,
-			param3:0,
-			scale : 5,
-		}
-	];
-	for (let i = 0; i < 5; ++i){
-		const angle = MathConstants.TAU * i / 5;
-		result.push({
-			type : ObjectType.MenuBackground + i,
-			x : Math.sin(angle) * 310,
-			y : 0,
-			z : Math.cos(angle) * 310 - 5,
-			param0:0,
-			param3:0,
-			rot : angle,
-		});
-	}
-	result[1].type = ObjectType.Player;
-	result[1].scale = 0.8;
-	result[1].rot! += Math.PI / 2;
-	result[1].param0 = 1; // animation hack
-	return result;
-}
-export function createLogoObjectList() : LevelObjectDef[] {
-	return [
-		{ // logo
-			x : 0,
-			y : 0,
-			z : -300,
-			type : ObjectType.TitlePangeaLogo,
-			param0 : 0,
-			param3 : 0,
-			rot : 0,
-			scale : 0.2,
-		},
-	]
-}
-export function createTitleObjectList() : LevelObjectDef[]{
-	const result : LevelObjectDef[] = [
-		{ // rex
-			x : 10,
-			y : 0,
-			z : 70,
-			type : ObjectType.Rex,
-			param0 : 1, // hack anim type
-			param3 : 0,
-			rot : Math.PI * -0.5,
-			scale : 0.5,
-		},{ // title text
-			x : 60,
-			y : 15,
-			z : 100,
-			type : ObjectType.TitleGameName,
-			param0 : 0,
-			param3 : 0,
-			rot : 0.9,
-			scale : 0.4,
-		},
-	];
-	for (let i = 0; i < 3; ++i){
-		result.push({ // background
-			x : -600 * 2.6 + i * 300*2.6,
-			y : 0,
-			z : -40,
-			type : ObjectType.TitleBackground,
-			param0 : 0,
-			param3 : 0,
-			scale : 2.6,
-		});
-	}
-	return result;
-}
-export function createHighScoresObjectList(scores : (string | number)[]) : LevelObjectDef[]{
-	const result : LevelObjectDef[] = [
-		{
-			x : 0,
-			y : 0,
-			z : 0,
-			type : ObjectType.Spiral,
-			param0 : 0,
-			param3 : 0,
-			rot : 0,
-			scale : 4
-		}
-	];
-
-	const numScores = Math.max(scores.length, 16);
-	for (let i = 0; i < numScores; i += 2){
-		const name = scores[i] as string ?? "";
-		let score = scores[i + 1] as number ?? 0;
-		let x = 18 * (11+3) * i + 200;
-
-		// print name
-		for (let j = 0; j < name.length; ++j){
-			const code = name.charCodeAt(j);
-			let meshId : number;
-			if (code >= 48 && code <= 57) // 0-9
-				meshId = 1 + code - 48;
-			else if (code >= 65 && code <= 90) // A-Z
-				meshId = 11 + code - 65;
-			else if (code >= 97 && code <= 122) // a-z
-				meshId = 11 + code - 97;
-			else switch(code){
-				case 35: meshId = 38; break; // #
-				case 33: meshId = 40; break; // !
-				case 63: meshId = 39; break; // ?
-				case 39: meshId = 42; break; // '
-				case 46: meshId = 37; break; // .
-				case 58: meshId = 43; break; // :
-				case 45: meshId = 41; break; // -
-				default: continue; // space or unknown char
-			}
-
-			result.push({
-				x : x + j * 18,
-				y : 0,
-				z : 0,
-				type : ObjectType.Letter,
-				param0 : meshId,
-				param3 : 0,
-			});
-		}
-
-		x += 75;
-		// print score
-		let place = 0;
-		while (score > 0 || place < 4) {
-			const digit = score % 10;
-			score = Math.floor(score / 10);
-			const meshId = 1 + digit;
-			result.push({
-				x : x - (place * 18),
-				y : -25,
-				z : 0,
-				type : ObjectType.Letter,
-				param0 : meshId,
-				param3 : 0,
-			});
-			place += 1;
-		}
-	}
-
-	return result;
-}
 
 export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: ArrayBufferSlice): [Qd3DMesh, LevelObjectDef[]] {
 
