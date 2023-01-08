@@ -833,8 +833,10 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		if (title) {
 			rex.animationController.t = 0;
 			rex.animationController.animSpeed = 0.8;
+			return rex;
+		} else {
+			return [rex, new ShadowEntity(assets, rex, 2.6, 2.6*2.5)];
 		}
-		return [rex, new ShadowEntity(assets, rex, 2.6, 2.6*2.5)];
 	},
 	function spawnLava(def, assets){ // 4
 
@@ -1377,7 +1379,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 	async createMenuScene(device : GfxDevice, context : SceneContext) : Promise<NanosaurSceneRenderer> {
 		
-		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface2.3dmf")
+		const menuModelsPromise = context.dataFetcher.fetchData(pathBase + "/Models/MenuInterface.3dmf")
 			.then(parseQd3DMeshGroup);
 		const playerSkeletonPromise = this.loadSkeleton(context.dataFetcher, "Deinon");
 
