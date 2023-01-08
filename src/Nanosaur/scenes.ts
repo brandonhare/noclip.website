@@ -77,13 +77,13 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_CameraPos;
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
-	float u_Time;
+	vec4 u_Time; // x = time, yzw = unused
 };
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
 	vec4 u_Colour;
 	#ifdef SCROLL_UVS
-	vec2 u_UVScroll;
+	vec4 u_UVScroll; // xy = uv, zw = unused
 	#endif
 };
 #ifdef SKINNED
@@ -553,7 +553,7 @@ class StaticObject implements Destroyable {
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?2:0));
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
 		let modelMatrix : ReadonlyMat4 = entity.modelMatrix;
@@ -565,6 +565,9 @@ class StaticObject implements Destroyable {
 		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
 
 		if (scrollUVs){
+			uniformData[uniformOffset++] = this.scrollUVs[0];
+			uniformData[uniformOffset++] = this.scrollUVs[1];
+			// repeat for padding
 			uniformData[uniformOffset++] = this.scrollUVs[0];
 			uniformData[uniformOffset++] = this.scrollUVs[1];
 		}
@@ -1260,7 +1263,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 			numSamplers : 1,
 		}]);
 		// set scene uniforms
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*1 + 1);
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*1 + 4);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
 		// camera matrix
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
@@ -1274,8 +1277,12 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 		uniformOffset += fillVec4v(uniformData, uniformOffset, this.sceneSettings.lightDir);
 		// light colour
 		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.lightColour);
-		uniformData[uniformOffset] = viewerInput.time * 0.001;
-		uniformOffset += 1;
+		const time = viewerInput.time * 0.001;
+		uniformData[uniformOffset++] = time;
+		// repeat for padding
+		uniformData[uniformOffset++] = time;
+		uniformData[uniformOffset++] = time;
+		uniformData[uniformOffset++] = time;
 
         const renderInstManager = this.renderHelper.renderInstManager;
 
