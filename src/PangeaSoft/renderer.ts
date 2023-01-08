@@ -56,9 +56,10 @@ export class Program extends DeviceProgram {
 	static ub_DrawParams = 1;
 	static ub_Bones = 2;
 
-	constructor(flags : RenderFlags){
+	constructor(flags : RenderFlags, numLights : number){
 		super();
 
+		this.setDefineString("NUM_LIGHTS", numLights.toString());
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
@@ -71,7 +72,6 @@ export class Program extends DeviceProgram {
 
 	override both = 
 `
-#define NUM_LIGHTS 1
 struct Light {
 	vec4 direction;
 	vec4 colour;
@@ -142,7 +142,7 @@ void main() {
 
 	vec4 colour = u_Colour;
 	#ifdef HAS_VERTEX_COLOURS
-		colour *= a_Colour;
+		colour.xyz *= a_Colour;
 	#endif
 
 	#ifndef UNLIT
@@ -269,13 +269,15 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	programs = new Map<RenderFlags, GfxProgram>();
 	//programIds = new WeakMap<GfxProgram, number>();
 
+	numLights = 1;
+
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
 
 	getProgram(renderFlags : RenderFlags){
 		let program = this.programs.get(renderFlags);
 		if (program) return program;
-		program = this.createProgram(new Program(renderFlags));
+		program = this.createProgram(new Program(renderFlags, this.numLights));
 		//if (!this.programIds.has(program))
 		//	this.programIds.set(program, this.programs.size);
 		this.programs.set(renderFlags, program);
@@ -301,7 +303,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			if (texture.numTextures == 1){
 				this.viewerTextures.push({
 					name : `Texture ${this.viewerTextures.length + 1}`,
-					surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer), texture.width, texture.height, texture.pixelFormat)],
+					surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)],
 				});
 				if (this.onnewtextures)
 					this.onnewtextures();
@@ -565,9 +567,10 @@ export class AnimatedObject implements Destroyable{
 export type SceneSettings = {
 	clearColour : GfxColor,
 	ambientColour : GfxColor,
-	lightDir : vec4,
-	lightColour : GfxColor,
-	cameraPos : vec3, // initial camera posiiton
+	fogColour? : GfxColor,
+	lightDirs : vec4[],
+	lightColours : GfxColor[],
+	cameraPos? : vec3, // initial camera posiiton
 	cameraTarget? : vec3, // initial camera look at (or zero)
 	// todo: fog
 };
@@ -588,28 +591,12 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
 		this.sceneSettings = sceneSettings;
 
-		vec4.normalize(sceneSettings.lightDir, sceneSettings.lightDir);
-
-		/*
-		cache.createModels(assets);
-
-		if (cache.assets.terrainModel)
-			this.entities.push(new Entity(cache.assets.terrainModel, [0,0,0],0,1,false));
-
-		for (const objectDef of objectList){
-			const entity = (EntityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, cache.assets);
-			if (entity){
-				if (Array.isArray(entity))
-					this.entities.push(...entity);
-				else
-					this.entities.push(entity);
-			}
-		}
-		*/
+		cache.numLights = sceneSettings.lightColours.length;
 	}
 
 	getDefaultWorldMatrix(out : mat4){
-		mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
+		if (this.sceneSettings.cameraPos)
+			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
 	}
 
 	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput){
@@ -619,8 +606,9 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			numUniformBuffers : 2,
 			numSamplers : 1,
 		}]);
+		const numLights = this.cache.numLights;
 		// set scene uniforms
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*1 + 4);
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*numLights + 4);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
 		// camera matrix
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
@@ -629,10 +617,12 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		uniformOffset += fillVec4(uniformData, uniformOffset, cameraPos[0], cameraPos[1], cameraPos[2], 1.0);
 		// ambient colour
 		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.ambientColour);
-		// light direction
-		uniformOffset += fillVec4v(uniformData, uniformOffset, this.sceneSettings.lightDir);
-		// light colour
-		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.lightColour);
+		for (let i = 0; i < numLights; ++i){
+			// light direction
+			uniformOffset += fillVec4v(uniformData, uniformOffset, this.sceneSettings.lightDirs[i]);
+			// light colour
+			uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.lightColours[i]);
+		}
 		// time
 		const time = viewerInput.time * 0.001;
 		uniformData[uniformOffset++] = time;

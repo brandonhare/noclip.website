@@ -6,23 +6,8 @@ import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { assert } from "../util";
 
+import { LevelObjectDef } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, swizzle1555Pixels } from "./QuickDraw3D";
-
-export type LevelObjectDef = {
-	x : number,
-	y : number, // terrain height
-	z : number,
-	type : number,
-	param0 : number,
-	param1? : number, // unused
-	param2? : number, // unused
-	param3 : number,
-	flags? : number,  // unused
-
-	// main menu hack
-	rot? : number,
-	scale? : number,
-};
 
 export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: ArrayBufferSlice): [Qd3DMesh, LevelObjectDef[]] {
 
@@ -224,7 +209,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		//const nextId = view.getUint16(offset + 12);
 		//const prevId = view.getUint16(offset + 16);
 		const y = getExactHeight(x / OREOMAP_TILE_SIZE, z / OREOMAP_TILE_SIZE) * HEIGHT_SCALE;
-		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, /*param1,param2,flags,*/ param3 });
+		objects.push({ x: x * MAP_TO_UNIT_VALUE, y, z: z * MAP_TO_UNIT_VALUE, type, param0, param1, param2, param3, flags });
 	}
 
 

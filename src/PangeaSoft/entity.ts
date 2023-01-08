@@ -1,5 +1,4 @@
 import * as Viewer from '../viewer';
-
 import { mat4, quat, vec2, vec3 } from "gl-matrix";
 import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 import { AABB, Frustum } from "../Geometry";
@@ -25,7 +24,21 @@ export type Assets<MeshType, SkeletonType, TerrainType> = {
 	terrain? : TerrainType
 };
 
+export type LevelObjectDef = {
+	x : number,
+	y : number, // terrain height
+	z : number,
+	type : number,
+	param0 : number,
+	param1 : number, // unused
+	param2 : number, // unused
+	param3 : number,
+	flags? : number,  // unused
 
+	// main menu hack
+	rot? : number,
+	scale? : number,
+};
 
 // nothing | delete this | spawn new entity
 export type EntityUpdateResult = void | false | Entity;
@@ -44,7 +57,7 @@ export class Entity {
 	alwaysUpdate = false;
 	shadow? : ShadowEntity = undefined;
 
-	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean){
+	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
 			assert(meshes != undefined, "invalid mesh for entity");
 			meshes = [meshes];
@@ -119,7 +132,7 @@ export class Entity {
 export class AnimatedEntity extends Entity{
 	animationController : AnimationController;
 
-	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number, pushUp : boolean, startAnim : number){
+	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number, startAnim : number, pushUp : boolean = false){
 		super(mesh.meshes, position, rotation, scale, pushUp);
 		this.animationController = new AnimationController(mesh.animationData);
 		this.animationController.currentAnimation = startAnim;

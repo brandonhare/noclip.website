@@ -390,24 +390,36 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 						assert(false, "Pixel type not implemented!");
 				}
 				
-				let pixels : Uint16Array;
+				let pixels : Uint8Array | Uint16Array;
 
 				const trimmedRowBytes = bytesPerPixel * width;
 				if (rowBytes === trimmedRowBytes){
-					pixels = buffer.createTypedArray(Uint16Array, offset, width * height * bytesPerPixel / 2, Endianness.BIG_ENDIAN);
+					if (bytesPerPixel === 2)
+						pixels = buffer.createTypedArray(Uint16Array, offset, width * height, Endianness.BIG_ENDIAN);
+					else
+						pixels = buffer.createTypedArray(Uint8Array, offset, width * height * bytesPerPixel);
 				} else {
 					// trim padding
-					pixels = new Uint16Array(width * height * bytesPerPixel);
-					for (let y = 0; y < height; ++y){
-						const row = buffer.createTypedArray(Uint16Array, offset + y * rowBytes, width * bytesPerPixel / 2, Endianness.BIG_ENDIAN);
-						pixels.set(row, y * trimmedRowBytes / 2);
+					if (bytesPerPixel === 2){
+						pixels = new Uint16Array(width * height);
+						for (let y = 0; y < height; ++y){
+							const row = buffer.createTypedArray(Uint16Array, offset + y * rowBytes, width * bytesPerPixel / 2, Endianness.BIG_ENDIAN);
+							pixels.set(row, y * trimmedRowBytes / 2);
+						}
+					} else {
+						pixels = new Uint8Array(width * height * bytesPerPixel);
+						for (let y = 0; y < height; ++y){
+							const row = buffer.createTypedArray(Uint8Array, offset + y * rowBytes, width * bytesPerPixel);
+							pixels.set(row, y * trimmedRowBytes);
+						}
 					}
 				}
 
-				
-				swizzle1555Pixels(pixels, currentTexture.alpha !== AlphaType.Opaque);
-				if (currentTexture.alpha === AlphaType.OneBitAlpha)
-					addEdgePadding(pixels, width, height);
+				if (bytesPerPixel === 2){
+					swizzle1555Pixels(pixels as Uint16Array, currentTexture.alpha !== AlphaType.Opaque);
+					if (currentTexture.alpha === AlphaType.OneBitAlpha)
+						addEdgePadding(pixels as Uint16Array, width, height);
+				}
 
 				currentTexture.width = width;
 				currentTexture.height = height;

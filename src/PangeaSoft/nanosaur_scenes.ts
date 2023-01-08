@@ -1,18 +1,19 @@
 import * as Viewer from '../viewer';
-import { GfxDevice, GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
-import { SceneContext } from "../SceneBase";
 import { DataFetcher } from "../DataFetcher";
+import { GfxDevice, GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { MathConstants } from "../MathHelpers";
+import { SceneContext } from "../SceneBase";
 import { assert } from "../util";
 
 import { parseAppleDouble } from "./AppleDouble";
-import { Assets, Entity } from "./entity";
+import { Assets, Entity, LevelObjectDef } from "./entity";
 import { entityCreationFunctions, invalidEntityType, ModelSetNames, ObjectType, ProcessedAssets, SkeletonNames } from "./nanosaur_entities";
-import { LevelObjectDef, parseTerrain } from "./nanosaur_terrain";
+import { parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
 import { loadTextureFromTGA } from "./TGA";
+import { vec4 } from "gl-matrix";
 
 const pathBase = "nanosaur";
 
@@ -207,6 +208,8 @@ function createMenuObjectList() : LevelObjectDef[] {
 			y : 0,
 			z : 0,
 			param0:0,
+			param1:0,
+			param2:0,
 			param3:0,
 			scale : 5,
 		}
@@ -219,6 +222,8 @@ function createMenuObjectList() : LevelObjectDef[] {
 			y : 0,
 			z : Math.cos(angle) * 310 - 5,
 			param0:0,
+			param1:0,
+			param2:0,
 			param3:0,
 			rot : angle,
 		});
@@ -237,6 +242,8 @@ function createLogoObjectList() : LevelObjectDef[] {
 			z : -300,
 			type : ObjectType.TitlePangeaLogo,
 			param0 : 0,
+			param1:0,
+			param2:0,
 			param3 : 0,
 			rot : 0,
 			scale : 0.2,
@@ -251,6 +258,8 @@ function createTitleObjectList() : LevelObjectDef[]{
 			z : 70,
 			type : ObjectType.Rex,
 			param0 : 1, // hack anim type
+			param1:0,
+			param2:0,
 			param3 : 0,
 			rot : Math.PI * -0.5,
 			scale : 0.5,
@@ -260,6 +269,8 @@ function createTitleObjectList() : LevelObjectDef[]{
 			z : 100,
 			type : ObjectType.TitleGameName,
 			param0 : 0,
+			param1:0,
+			param2:0,
 			param3 : 0,
 			rot : 0.9,
 			scale : 0.4,
@@ -272,6 +283,8 @@ function createTitleObjectList() : LevelObjectDef[]{
 			z : -40,
 			type : ObjectType.TitleBackground,
 			param0 : 0,
+			param1:0,
+			param2:0,
 			param3 : 0,
 			scale : 2.6,
 		});
@@ -290,6 +303,8 @@ function createHighScoresObjectList() : LevelObjectDef[]{
 			z : 0,
 			type : ObjectType.Spiral,
 			param0 : 0,
+			param1:0,
+			param2:0,
 			param3 : 0,
 			rot : 0,
 			scale : 4
@@ -329,6 +344,8 @@ function createHighScoresObjectList() : LevelObjectDef[]{
 				z : 0,
 				type : ObjectType.Letter,
 				param0 : meshId,
+				param1:0,
+				param2:0,
 				param3 : 0,
 			});
 		}
@@ -346,6 +363,8 @@ function createHighScoresObjectList() : LevelObjectDef[]{
 				z : 0,
 				type : ObjectType.Letter,
 				param0 : meshId,
+				param1:0,
+				param2:0,
 				param3 : 0,
 			});
 			place += 1;
@@ -364,8 +383,8 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:0, g:0, b:0, a:1},
 			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
-			lightDir : [-1, 0.7, 1, 0],
-			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			lightDirs : [[1, -0.7, -1, 0]],
+			lightColours : [{r:1.3,g:1.3,b:1.3,a:1}],
 			cameraPos : [0, 0, 70],
 		},
 		objects : createLogoObjectList,
@@ -378,8 +397,8 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:1, g:1, b:1, a:1},
 			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
-			lightDir : [-1, 0.7, 1, 0],
-			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			lightDirs : [[1, -0.7, -1, 0]],
+			lightColours : [{r:1.3,g:1.3,b:1.3,a:1}],
 			cameraPos : [110, 90, 190],
 		},
 		objects : createTitleObjectList,
@@ -392,8 +411,8 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:0, g:0, b:0, a:1},
 			ambientColour : {r:0.25, g:0.25, b:0.25, a:1.0},
-			lightDir : [-1, 0.7, 1, 0],
-			lightColour : {r:1.3,g:1.3,b:1.3,a:1},
+			lightDirs : [[1, -0.7, -1, 0]],
+			lightColours : [{r:1.3,g:1.3,b:1.3,a:1}],
 			cameraPos : [0, 0, 600],
 		},
 		objects : createMenuObjectList,
@@ -407,8 +426,8 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:0.95, g:0.95, b:0.75, a:1.0},
 			ambientColour: {r:0.2, g:0.2, b:0.2, a:1.0},
-			lightDir : [-1, 0.7, 1, 0],
-			lightColour : {r:1.2, g:1.2, b:1.2, a:1},
+			lightDirs : [[1, -0.7, -1, 0]],
+			lightColours : [{r:1.2, g:1.2, b:1.2, a:1}],
 			cameraPos : [4795, 493, 15280],
 			cameraTarget : [4795, 406, 14980],
 		},
@@ -422,8 +441,8 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:0.95, g:0.95, b:0.75, a:1.0},
 			ambientColour: {r:0.2, g:0.2, b:0.2, a:1.0},
-			lightDir : [-1, 0.7, 1, 0],
-			lightColour : {r:1.2, g:1.2, b:1.2, a:1},
+			lightDirs : [[1, -0.7, -1, 0]],
+			lightColours : [{r:1.2, g:1.2, b:1.2, a:1}],
 			cameraPos : [4795, 493, 15280],
 			cameraTarget : [4795, 406, 14980],
 		},
@@ -435,13 +454,20 @@ const nanosaurSceneDefs : SceneSetupDef[] = [
 		settings : {
 			clearColour : {r:0, g:0, b:0, a:1},
 			ambientColour : {r:0.2, g:0.2, b:0.2, a:1.0},
-			lightDir : [-0.7, 0.1, 0.3, 0],
-			lightColour : {r:1,g:1,b:1,a:1},
+			lightDirs : [[0.7, -0.1, -0.3, 0], [-1, -0.3, -0.4, 0]],
+			lightColours : [{r:1,g:1,b:1,a:1}, {r:0.4,g:0.4,b:0.4,a:1}],
 			cameraPos : [-110, -30, 90],
 		},
 		objects : createHighScoresObjectList
 	},
 ];
+
+for (const def of nanosaurSceneDefs){
+	for (const dir of def.settings.lightDirs){
+		vec4.negate(dir, dir);
+		vec4.normalize(dir, dir);
+	}
+}
 
 const sceneDescs = nanosaurSceneDefs.map((def) => new NanosaurSceneDesc(def));
 export const sceneGroup: Viewer.SceneGroup = { id : "nanosaur", name : "Nanosaur", sceneDescs };

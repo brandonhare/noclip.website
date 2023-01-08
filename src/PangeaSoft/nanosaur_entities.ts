@@ -2,8 +2,7 @@ import { vec3 } from "gl-matrix";
 import { MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, ShadowEntity } from "./entity";
-import { LevelObjectDef } from "./nanosaur_terrain";
+import { AnimatedEntity, Assets, Entity, EntityUpdateResult, LevelObjectDef, ShadowEntity } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
 export type ProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject>;
@@ -76,13 +75,13 @@ class UndulateEntity extends Entity {
 
 
 function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
-	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, false, 1);
+	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, 1, false);
 	return [result, new ShadowEntity(assets.models.Global_Models[1], result, 2.7, 2.7*1.5)];
 };
 export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
 		const mainMenu = def.param0; // main menu hack
-		const player = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, !mainMenu, mainMenu);
+		const player = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, mainMenu, !mainMenu);
 		if (mainMenu){
 			player.animationController.t = 0;
 			return player;
@@ -101,7 +100,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
 		const title = def.param0 === 1; // title hack
-		const rex = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, false, title ? 1 : 0);
+		const rex = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, title ? 1 : 0, false);
 
 		if (title) {
 			rex.animationController.t = 0;
@@ -256,7 +255,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 		
 
 		const hasRock = (def.param3 & (1<<1)) !== 0;
-		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y, def.z], null, 1, false, hasRock ? 2 : 0);
+		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y, def.z], null, 1, hasRock ? 2 : 0, false);
 		ptera.startY = def.y;
 		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
 		const results : Entity[] = [ptera, new ShadowEntity(assets.models.Global_Models[1], ptera, 4, 4.5)];
@@ -268,7 +267,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 		return results;
 	},
 	function spawnStegosaurus(def, assets){ // 8
-		const stego = new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, true, 1);
+		const stego = new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, 1, true);
 		return [stego, new ShadowEntity(assets.models.Global_Models[1], stego, 5, 5*2)];
 	},
 	function spawnTimePortal(def, assets){ // 9
@@ -360,7 +359,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 		return result;
 	},
 	function spawnSpitter(def, assets){ // 16
-		const spitter = new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, false, 0);
+		const spitter = new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, 0, false);
 		return [spitter, new ShadowEntity(assets.models.Global_Models[1], spitter, 1.6, 1.6*2.5)];
 	},
 	function spawnStepStone(def, assets){ // 17

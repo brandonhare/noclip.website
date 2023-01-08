@@ -1,335 +1,265 @@
-
-
-import * as Viewer from '../viewer';
-import * as UI from "../ui";
+import { vec3, vec4 } from "gl-matrix";
+import { colorMult, colorScale } from "../Color";
 import { GfxDevice } from "../gfx/platform/GfxPlatform";
 import { SceneContext } from "../SceneBase";
-import { parseAppleDouble, ResourceFork } from "./AppleDouble";
-import { LevelObjectDef } from "./nanosaur_terrain";
-import { parseQd3DMeshGroup } from "./QuickDraw3D";
-import { parseSkeleton } from "./skeleton";
-import { assert, assertExists } from "../util";
-import { Endianness } from "../endian";
-import ArrayBufferSlice from "../ArrayBufferSlice";
+import * as Viewer from '../viewer';
 
-const id = "bugdom";
-const name = "Bugdom";
+import { parseAppleDouble } from "./AppleDouble";
+import { BugdomLevelType, ModelSetNames, ProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
+import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
+import { Assets, Entity, LevelObjectDef } from "./entity";
+import { parseQd3DMeshGroup, Qd3DMesh } from "./QuickDraw3D";
+import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
+import { parseSkeleton, SkeletalMesh } from "./skeleton";
+
 const pathBase = "bugdom";
 
-type BugdomTerrain = {
-}
 
-function parseBugdomTerrain(terrainData : ResourceFork) : BugdomTerrain{
 
-	function get(resourceName : string, id : number, debugName : string){
-		return assertExists(terrainData.get(resourceName)?.get(id), debugName);
-	}
-	function getData(resourceName : string, id : number, debugName : string){
-		return get(resourceName, id, debugName)?.createDataView();
+export type RawAssets = Assets<Qd3DMesh, SkeletalMesh, ParsedBugdomTerrain>;
+
+export class BugdomSceneRenderer extends SceneRenderer {
+
+	processedAssets : ProcessedAssets = {models : {}, skeletons : {}, terrain : undefined, levelType : BugdomLevelType.Lawn };
+
+	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings, levelType : BugdomLevelType){
+		super(device, context, sceneSettings);
+
+		this.createModels(device, this.cache, assets);
+		this.processedAssets.levelType = levelType;
+
+		if (this.processedAssets.terrain)
+			this.entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
+
+		// todo terrain objects
+
+		for (const objectDef of objectList){
+			const entity = spawnBugdomEntity(objectDef, this.processedAssets);
+			if (entity){
+				if (Array.isArray(entity))
+					this.entities.push(...entity);
+				else
+					this.entities.push(entity);
+			}
+		}
 	}
 	
-	const TERRAIN_POLYGON_SIZE = 160;
+	createModels(device : GfxDevice, cache : Cache, rawAssets : RawAssets){
 
-	// read header
-	const header = getData("Hedr", 1000, "header");
-	assert(header.getUint32(0) === 0x7000000, "unknown terrain version number");
-	const numItems = header.getUint32(4);
-	const mapWidth = header.getUint32(8);
-	const mapHeight = header.getUint32(12);
-	const numTilePages = header.getUint32(16);
-	const numTilesInList = header.getUint32(20);
-	const tileSize = header.getFloat32(24);
-	const heightMinY = header.getFloat32(28);
-	const heightMaxY = header.getFloat32(32);
-	const numSplines = header.getUint32(36);
-	const numFences = header.getUint32(40);
-
-	// read tile image stufff
-	const tileImageData = get("Timg", 1000, "tile image data").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-
-	// read tiles
-	function loadTiles(buffer? : ArrayBufferSlice){
-		if (!buffer)
-			return;
-		const data = buffer.createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-		for (let i = 0; i < data.length; ++i){
-			const tile = data[i];
-			data[i] = (tile & ~0xFFF) | tileImageTranslationTable[tile & 0xFFF];
+		this.processedAssets = {
+			models : {},
+			skeletons : {},
+			levelType : BugdomLevelType.Lawn
 		}
-		return data;
-	}
-	const floor = loadTiles(get("Layr", 1000, "floor layer"))!;
-	const ceiling = loadTiles(terrainData.get("Layr")!.get(1001));
-	const numLayers = ceiling ? 2 : 1;
-
-	// read heights
-	const yScale = TERRAIN_POLYGON_SIZE / tileSize;
-	const yCoords : Float32Array[] = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i){
-		const heights = get("YCrd", 1000 + i, "layer").createTypedArray(Float32Array, undefined, undefined, Endianness.BIG_ENDIAN);
-		for (let j = 0; j < heights.length; ++j)
-			heights[j] *= yScale;
-		yCoords[i] = (heights);
-	}
-
-	// read vertex colours
-	const vertexColours : Uint16Array[] = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i){
-		vertexColours[i] = get("Vcol", 1000 + i, "vertex colours").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-	}
-
-	// read splits
-	const splits = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i){
-		splits[i] = get("Splt", 1000 + i, "split data").createTypedArray(Uint8Array);
-	}
-
-	// read items
-	const itemData = getData("Itms", 1000, "items");
-	const items : LevelObjectDef[] = new Array(numItems);
-	for (let i = 0; i < numItems; ++i){
-		items[i] = {
-			x : itemData.getUint16(i * 12 + 0),
-			y : 0,
-			z : itemData.getUint16(i * 12 + 2),
-			type : itemData.getUint16(i * 12 + 4),
-			param0 : itemData.getUint8(i * 12 + 6),
-			param1 : itemData.getUint8(i * 12 + 7),
-			param2 : itemData.getUint8(i * 12 + 8),
-			param3 : itemData.getUint8(i * 12 + 9),
-			flags : itemData.getUint16(i * 12 + 10)
-		};
-	}
-
-	type SplineDef = {
-		numPoints : number,
-		points : Float32Array,
-		items : SplineItemDef[],
-		top : number,
-		left : number,
-		bottom : number,
-		right : number,
-	};
-
-	type SplineItemDef = {
-		placement : number,
-		type : number,
-		param0 : number,
-		param1 : number,
-		param2 : number,
-		param3 : number,
-		flags : number
-	};
-
-	// read splines
-	const splines : SplineDef[] = new Array(numSplines);
-	if (numSplines > 0){
-		const splineDefData = getData("Spln", 1000, "spline defs");
-		for (let i = 0; i < numSplines; ++i){
-			// read def
-			const numNubs = splineDefData.getUint16(i * 32);
-			const numPoints = splineDefData.getUint32(i * 32 + 8);
-			const numItems = splineDefData.getUint16(i * 32 + 16);
-			const top = splineDefData.getInt16(i * 32 + 24);
-			const left = splineDefData.getInt16(i * 32 + 26);
-			const bottom = splineDefData.getInt16(i * 32 + 28);
-			const right = splineDefData.getInt16(i * 32 + 30);
-
-			// read points
-			const points = 
-				numPoints > 0
-				? get("SpPt", 1000 + i, "spline points").createTypedArray(Float32Array, undefined, undefined, Endianness.BIG_ENDIAN)
-				: new Float32Array(0);
-
-			// read items
-			const items : SplineItemDef[] = new Array(numItems);
-			const itemData = getData("SpIt", 1000 + i, "spline items");
-			for (let j = 0; j < numItems; ++j){
-				items[j] = {
-					placement : itemData.getFloat32(12 * j),
-					type : itemData.getUint16(12 * j + 4),
-					param0 : itemData.getUint8(12 * j + 6),
-					param1 : itemData.getUint8(12 * j + 7),
-					param2 : itemData.getUint8(12 * j + 8),
-					param3 : itemData.getUint8(12 * j + 9),
-					flags : itemData.getUint16(12 * j + 10)
-				}
-			}
-
-			splines[i] = {
-				numPoints,
-				points,
-				items,
-				top, left, bottom, right
-			}
+		
+		for (const modelSetName of Object.keys(rawAssets.models)){
+			const modelSet = rawAssets.models[modelSetName];
+			this.processedAssets.models[modelSetName] = modelSet.map((meshes)=>
+				meshes.map((mesh)=>
+					new StaticObject(device, cache, mesh)
+				)
+			);
 		}
-	}
-
-	// read fences
-	type FenceDef = {
-		type : number,
-		numNubs : number,
-		nubs : Int32Array,
-		top : number,
-		left : number,
-		bottom : number,
-		right : number
-	};
-	const fences : FenceDef[] = new Array(numFences);
-	if (numFences > 0){
-		const fenceData = getData("Fenc", 1000, "fences");
-		for (let i = 0; i < numFences; ++i){
-			// read fence def
-			const type = fenceData.getUint16(i * 16);
-			const numNubs = fenceData.getInt16(i * 16 + 2);
-			const top = fenceData.getInt16(i * 16 + 8);
-			const left = fenceData.getInt16(i * 16 + 10);
-			const bottom = fenceData.getInt16(i * 16 + 12);
-			const right = fenceData.getInt16(i * 16 + 14);
-
-			// read fence nubs
-			const nubs = get("FnNb", 1000 + i, "fence nubs").createTypedArray(Int32Array, undefined, 2 * numNubs, Endianness.BIG_ENDIAN);
-			fences[i] = {
-				type,
-				numNubs,
-				nubs,
-				top,
-				left,
-				bottom,
-				right
-			}
+		for (const skeletonName of Object.keys(rawAssets.skeletons)){
+			const skeleton = rawAssets.skeletons[skeletonName];
+			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton);
 		}
-	}
-
-
-	return {
-		mapWidth,
-		mapHeight,
-		tileImageData,
-		floor,
-		ceiling,
-		vertexColours,
-		splits,
-		items,
-		splines,
-		fences,
 	}
 }
 
-class BugdomSceneRenderer implements Viewer.SceneGfx {
-	constructor(device : GfxDevice, context : SceneContext){
-	}
 
-	public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput) {
-	}
 
-	public destroy(device: GfxDevice) {
-	}
-
-}
 
 class BugdomSceneDesc implements Viewer.SceneDesc {
-	constructor(public id : string, public name : string, public levelName : string){}
+	id : string;
+	name : string;
+	def : BugdomLevelTypeDef;
+	sceneIndex : number;
 
-	
-	public async createScene(device: GfxDevice, context: SceneContext): Promise<Viewer.SceneGfx> {
+	constructor(def : BugdomLevelTypeDef, sceneIndex : number){
+		const {id, name} = def.scenes[sceneIndex];
+		this.id = id;
+		this.name = name;
+		this.def = def;
+		this.sceneIndex = sceneIndex;
+	}
 
-		const modelFilenames = [
-			"WinLose",
-			"AntHill_Models",
-			"BeeHive_Models",
-			"BonusScreen",
-			"Forest_Models",
-			"Global_Models1",
-			"Global_Models2",
-			"HighScores",
-			"Lawn_Models1",
-			"Lawn_Models2",
-			"LevelIntro",
-			"MainMenu",
-			"Night_Models",
-			"Pangea",
-			"Pond_Models",
-			"Title"
-		];
-		const modelPromises = Promise.all(
-			modelFilenames.map((filename)=>
-				context.dataFetcher.fetchData(`${pathBase}/Models/${filename}.3dmf`)
+	public async createScene(device: GfxDevice, context: SceneContext): Promise<BugdomSceneRenderer> {
+		const scene = this.def.scenes[this.sceneIndex];
+
+		const modelPromises = Promise.all(this.def.models.map((modelName)=>
+			context.dataFetcher.fetchData(`${pathBase}/Models/${modelName}.3dmf`)
 				.then(parseQd3DMeshGroup)
-			)
-		);
-
-		const skeletonFilenames = [
-			"Larva",
-			"Mosquito",
-			"PondFish",
-			"QueenBee",
-			"Roach",
-			"RootSwing",
-			"Skippy",
-			"Slug",
-			"Spider",
-			"WaterBug",
-			"WingedFireAnt",
-			"WorkerBee",
-			"Ant",
-			"AntKing",
-			"Bat",
-			"BoxerFly",
-			"Buddy",
-			"Caterpillar",
-			"DoodleBug",
-			"DragonFly",
-			"FireFly",
-			"FlyingBee",
-			"Foot",
-			"LadyBug",
-		];
-		const skeletonPromises = Promise.all(
-			skeletonFilenames.map((filename)=>
-				Promise.all([
-					context.dataFetcher.fetchData(`${pathBase}/Skeletons/${filename}.3dmf`)
-						.then(parseQd3DMeshGroup),
-					context.dataFetcher.fetchData(`${pathBase}/Skeletons/${filename}.skeleton.rsrc`)
-						.then(parseAppleDouble),
-				]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData))
-			)
-		);
-
-		const terrainFilenames = [
-			"AntHill",
-			"AntKing",
-			"Beach",
-			"BeeHive",
-			"Flight",
-			"Lawn",
-			"Night",
-			"Pond",
-			"QueenBee",
-			"Training"
-		];
-		const terrainPromises = Promise.all(terrainFilenames.map((filename)=>
-			context.dataFetcher.fetchData(`${pathBase}/Terrain/${filename}.ter.rsrc`)
-			.then((data)=>parseBugdomTerrain(parseAppleDouble(data)))
 		));
+		const skeletonPromises = Promise.all(this.def.skeletons?.map((skeletonName)=>
+			Promise.all([
+				context.dataFetcher.fetchData(`${pathBase}/Skeletons/${skeletonName}.3dmf`)
+					.then(parseQd3DMeshGroup),
+				context.dataFetcher.fetchData(`${pathBase}/Skeletons/${skeletonName}.skeleton.rsrc`)
+					.then(parseAppleDouble),
+			]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData))
+		) ?? []);
+
+		const terrainPromise = scene.terrain
+			? context.dataFetcher.fetchData(`${pathBase}/Terrain/${scene.terrain}.ter.rsrc`)
+				.then((data)=>parseBugdomTerrain(parseAppleDouble(data)))
+			: {items:[]};
 
 		const models = await modelPromises;
 		const skeletons = await skeletonPromises;
-		const terrains = await terrainPromises;
+		const terrain = await terrainPromise;
 
-		//console.log("models", models);
-		//console.log("skeletons", skeletons);
-		//console.log("terrains", terrains);
+		let objects : LevelObjectDef[] = terrain.items;
 
-		return new BugdomSceneRenderer(device, context);
+		if (scene.objects){
+			let objArray;
+			if (Array.isArray(scene.objects))
+				objArray = scene.objects;
+			else
+				objArray = scene.objects();
+			objects = [...objects, ...objArray];
+		}
+
+		const rawAssets : RawAssets = {
+			models : {},
+			skeletons : {},
+			terrain
+		};
+		for (let i = 0; i < (this.def.models?.length ?? 0); ++i){
+			const name = this.def.models![i];
+			rawAssets.models[name] = models[i];
+		}
+		for (let i = 0; i < (this.def.skeletons?.length ?? 0); ++i){
+			const name = this.def.skeletons![i];
+			rawAssets.skeletons[name] = skeletons[i];
+		}
+
+		return new BugdomSceneRenderer(device, context, rawAssets, objects, this.def.settings, this.def.type);
 	}
 }
 
 
-const sceneDescs = [
-	new BugdomSceneDesc("level1", "Level 1", "Level1"),
-];
+type BugdomSceneDef = {
+	id : string,
+	name : string,
+	terrain? : string,
+	objects? : LevelObjectDef[] | (()=>LevelObjectDef[]),
+};
+
+type BugdomLevelTypeDef = {
+	type : BugdomLevelType,
+	hasCeiling : boolean,
+	models : (typeof ModelSetNames[number])[],
+	skeletons : (typeof SkeletonNames[number])[],
+	scenes : BugdomSceneDef[],
+	settings : SceneSettings,
+};
+const bugdomSceneDefs : BugdomLevelTypeDef[] = [
+	{ // lawn
+		type : BugdomLevelType.Lawn,
+		hasCeiling : false,
+		models : ["Lawn_Models1", "Lawn_Models2"],
+		skeletons : ["BoxerFly", "Slug", "Ant"],
+		scenes : [
+			{ id : "training", name : "Training", terrain : "Training" },
+			{ id : "lawn", name : "Lawn", terrain : "Lawn" }
+		],
+		settings : {
+			ambientColour : { r : 1, g : 1, b : 0.9, a : 1},
+			lightColours : [{ r : 1, g : 1, b : 0.6, a : 1}, {r : 1, g : 1, b : 1, a : 1}],
+			lightDirs : [[0.4, -0.35, 1, 0], [-0.2, -0.7, -0.1, 0]],
+			clearColour : {r : 0.352, g : 0.380, b : 1, a: 1},
+			fogColour : { r : 0.05, g : 0.25, b : 0.05, a : 1},
+		}
+	}, { // pond
+		type : BugdomLevelType.Pond,
+		hasCeiling : false,
+		models : ["Pond_Models"],
+		skeletons : ["Mosquito", "WaterBug", "PondFish", "Skippy", "Slug"],
+		scenes : [{ id : "pond", name : "Pond", terrain : "Pond" }],
+		settings : {
+			ambientColour : { r : 1, g : 1, b : 0.9, a : 1},
+			lightColours : [{ r : 1, g : 1, b : 0.6, a : 1}, {r : 1, g : 1, b : 1, a : 1}],
+			lightDirs : [[0.4, -0.45, 1, 0], [-0.2, -0.7, -0.1, 0]],
+			clearColour : { r : 0.9, g : 0.9, b : 0.85, a : 1},
+			fogColour : { r : 0.9, g : 0.9, b : 0.85, a : 1},
+		}
+	}, { // forest
+		type : BugdomLevelType.Forest,
+		hasCeiling : false,
+		models : ["Forest_Models"],
+		skeletons : ["DragonFly", "Foot", "Spider", "Caterpillar", "Bat", "FlyingBee", "Ant"],
+		scenes : [
+			{ id : "beach", name : "Beach", terrain : "Beach" },
+			{ id : "flight", name : "Flight", terrain : "Flight" },
+		],
+		settings : {
+			ambientColour : { r : 1, g : 0.6, b : 0.3, a : 1},
+			lightColours : [{ r : 1, g : 0.8, b : 0.3, a : 1}, {r : 1, g : 0.9, b : 0.3, a : 1}],
+			lightDirs : [[0.4, -0.15, 1, 0], [-0.2, -0.7, -0.1, 0]],
+			clearColour : { r : 1, g : 0.29, b : 0.063, a : 1},
+			fogColour : { r : 1, g : 0.29, b : 0.063, a : 1},
+		}
+	}, { // hive
+		type : BugdomLevelType.Hive,
+		hasCeiling : true,
+		models : ["BeeHive_Models"],
+		skeletons : ["Larva", "FlyingBee", "WorkerBee", "QueenBee"],
+		scenes : [
+			{ id : "beehive", name : "Beehive", terrain : "BeeHive" },
+			{ id : "queenbee", name : "Queen Bee", terrain : "QueenBee" },
+		],
+		settings : {
+			ambientColour : { r : 1, g : 1, b : 0.8, a : 1},
+			lightColours : [{ r : 1, g : 1, b : 0.7, a : 1}, {r : 1, g : 1, b : 0.9, a : 1}],
+			lightDirs : [[0.4, -0.35, 1, 0], [-0.8, 1, -0.2, 0]],
+			clearColour : { r : 0.7, g : 0.6, b : 0.4, a : 1},
+			fogColour : { r : 0.7, g : 0.6, b : 0.4, a : 1},
+		}
+	}, { // night
+		type : BugdomLevelType.Night,
+		hasCeiling : false,
+		models : ["Night_Models"],
+		skeletons : ["WingedFireAnt", "FireFly", "Caterpillar", "Slug", "Roach", "Ant"],
+		scenes : [{ id : "night", name : "Night", terrain : "Night" }],
+		settings : {
+			ambientColour : { r : 0.5, g : 0.5, b : 0.5, a : 1},
+			lightColours : [{ r : 0.8, g : 1, b : 0.8, a : 1}, {r : 0.6, g : 0.8, b : 0.7, a : 1}],
+			lightDirs : [[0.4, -0.35, 1, 0], [-0.2, -0.7, -0.1, 0]],
+			clearColour : { r : 0.02, g : 0.02, b : 0.08, a : 1},
+			fogColour : { r : 0.02, g : 0.02, b : 0.08, a : 1},
+		}
+	}, { // anthill
+		type : BugdomLevelType.Anthill,
+		hasCeiling : true,
+		models : ["AntHill_Models"],
+		skeletons : ["AntKing", "Slug", "Ant", "WingedFireAnt", "RootSwing", "Roach"],
+		scenes : [
+			{ id : "anthill", name : "Anthill", terrain : "AntHill" },
+			{ id : "antking", name : "Ant King", terrain : "AntKing" },
+		],
+		settings : {
+			ambientColour : { r : 0.5, g : 0.5, b : 0.6, a : 1},
+			lightColours : [{ r : 0.7, g : 0.7, b : 0.8, a : 1}, {r : 1, g : 1, b : 1, a : 1}],
+			lightDirs : [[0.4, -0.35, 1, 0], [-0.8, 1, -0.2, 0]],
+			clearColour : { r : 0.15, g : 0.07, b : 0.15, a : 1},
+			fogColour : { r : 0.15, g : 0.07, b : 0.15, a : 1},
+		}
+	}
+]
+for (const def of bugdomSceneDefs){
+	def.models.push("Global_Models1", "Global_Models2");
+	def.skeletons.push("DoodleBug", "LadyBug");
+	for (const dir of def.settings.lightDirs){
+		vec4.negate(dir, dir);
+		vec4.normalize(dir, dir);
+	}
+	
+	colorScale(def.settings.ambientColour, def.settings.ambientColour,0.2);
+	colorScale(def.settings.lightColours[0], def.settings.lightColours[0], 1.1);
+	colorScale(def.settings.lightColours[1], def.settings.lightColours[1], 0.5);
+}
 
 
-export const sceneGroup: Viewer.SceneGroup = { id, name, sceneDescs };
+const sceneDescs = bugdomSceneDefs.flatMap((def) => def.scenes.map((scene, index)=>new BugdomSceneDesc(def, index)));
+export const sceneGroup: Viewer.SceneGroup = { id : "bugdom", name : "Bugdom", sceneDescs };
