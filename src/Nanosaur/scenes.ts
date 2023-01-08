@@ -972,15 +972,33 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	function spawnPteranodon(def, assets){ // 7
 		// todo fly and stuff
+
+		class PteranodonEntity extends AnimatedEntity {
+			rock? : Entity = undefined;
+
+			override update(dt : number) {
+				super.update(dt);
+
+				if (this.rock){
+					vec3.set(this.rock.position, 10, -10, 80);
+					vec3.transformMat4(this.rock.position, this.rock.position, this.animationController.boneTransforms[3]);
+					vec3.transformMat4(this.rock.position, this.rock.position, this.modelMatrix);
+					this.rock.updateMatrix();
+				}
+			}
+		};
+
 		const hasRock = (def.param3 & (1<<1)) !== 0;
-		const ptera = new AnimatedEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1, false, hasRock ? 2 : 0)
-		const result : Entity[] = [ptera, new ShadowEntity(assets, ptera, 4, 4.5)];
+		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1, false, hasRock ? 2 : 0);
+		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
+		const results : Entity[] = [ptera, new ShadowEntity(assets, ptera, 4, 4.5)];
 		if (hasRock) {
 			// todo attach
 			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
-			result.push(rock);
+			ptera.rock = rock;
+			results.push(rock);
 		}
-		return result;
+		return results;
 	},
 	function spawnStegosaurus(def, assets){ // 8
 		const stego = new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, true, 1);
