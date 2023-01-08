@@ -22,7 +22,7 @@ import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorH
 import { TextureMapping } from "../TextureHolder";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import ArrayBufferSlice from "../ArrayBufferSlice";
-import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, loadTextureFromImage } from "./QuickDraw3D";
+import { Qd3DMesh, Qd3DTexture, parseQd3DMeshGroup, loadTextureFromTGA, AlphaType, convertGreyscaleTextureToAlphaMap } from "./QuickDraw3D";
 import { parseTerrain, LevelObjectDef, createMenuObjectList, createTitleObjectList, createLogoObjectList, ObjectType, createHighScoresObjectList } from "./terrain";
 import { AnimationController, AnimationData, parseSkeleton, SkeletalMesh} from "./skeleton";
 import { colorNewFromRGBA } from "../Color";
@@ -57,7 +57,7 @@ class Program extends DeviceProgram {
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
-		this.setDefineBool("TEXTURE_HAS_ALPHA", (flags & RenderFlags.TextureHasAlpha) !== 0);
+		this.setDefineBool("TEXTURE_HAS_ONE_BIT_ALPHA", (flags & RenderFlags.TextureHasOneBitAlpha) !== 0);
 		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
 		this.setDefineBool("SCROLL_UVS", (flags & RenderFlags.ScrollUVs) !== 0);
 		this.setDefineBool("SKINNED", (flags & RenderFlags.Skinned) !== 0);
@@ -165,7 +165,11 @@ void main(){
 			#ifdef SCROLL_UVS
 				uv += u_UVScroll * u_Time;
 			#endif
-			colour *= texture(SAMPLER_2D(u_Texture), uv);
+			vec4 texColour = texture(SAMPLER_2D(u_Texture), uv);
+			#ifdef TEXTURE_HAS_ONE_BIT_ALPHA
+				if (texColour.a < 0.5) { discard; }
+			#endif
+			colour *= texColour;
 		#else
 			//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
 			vec2 uv = fract(v_UV);
@@ -224,12 +228,12 @@ void main(){
 					break;
 			}
 
-			colour *= texture(SAMPLER_2D(u_TilemapTexture), vec3(uv, textureId));
+			vec4 texColour = texture(SAMPLER_2D(u_TilemapTexture), vec3(uv, textureId));
+			#ifdef TEXTURE_HAS_ONE_BIT_ALPHA
+				if (texColour.a < 0.5) { discard; }
+			#endif
+			colour *= texColour;
 		#endif // end ifdef tilemap
-
-		#ifdef TEXTURE_HAS_ALPHA
-			if (colour.a < 0.5) { discard; }
-		#endif
 	#endif
 	
 	#ifdef HAS_VERTEX_COLOURS
@@ -353,8 +357,11 @@ class Cache extends GfxRenderCache implements UI.TextureListHolder {
 
 		
 		// fixup shadow model
-		if (this.assets.globalModels[1])
-			this.assets.globalModels[1][0].renderFlags |= RenderFlags.Translucent;
+		if (this.assets.globalModels[1]){
+			const shadowModel = this.assets.globalModels[1][0];
+			shadowModel.renderFlags |= RenderFlags.Translucent;
+			shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0;
+		}
 	}
 	destroyModels(){
 		const device = this.device;
@@ -393,7 +400,7 @@ const enum RenderFlags {
 	Unlit			 = 0x2000,
 	ScrollUVs        = 0x1000,
 	HasTexture		 = 0x800,
-	TextureHasAlpha  = 0x400,
+	TextureHasOneBitAlpha  = 0x400,
 	TextureTilemap	 = 0x200,
 	HasVertexColours = 0x100,
 	ModelIndex = 0xFF
@@ -482,8 +489,11 @@ class StaticObject implements Destroyable {
 			this.textureMapping.push(cache.createTextureMapping(texture));
 
 			this.renderFlags |= RenderFlags.HasTexture;
-			if (texture.hasAlpha)
-				this.renderFlags |= RenderFlags.TextureHasAlpha;
+			if (texture.alpha === AlphaType.OneBitAlpha)
+				this.renderFlags |= RenderFlags.TextureHasOneBitAlpha;
+			else if (texture.alpha === AlphaType.Translucent)
+				this.renderFlags |= RenderFlags.Translucent;
+
 			if (hasTilemap)
 				this.renderFlags |= RenderFlags.TextureTilemap;
 		}
@@ -950,6 +960,7 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 
 		class GasVentEntity extends Entity {
 			override update(dt : number){
+				// todo: cap to 60fps
 				this.scale[1] = Math.random() * 0.3 + 0.5;
 				this.updateMatrix();
 			}
@@ -1494,7 +1505,9 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 		const skeletonPromises = SkeletonNames.map((name)=>this.loadSkeleton(context.dataFetcher, name))
 
-		const shadowTexturePromise = loadTextureFromImage(context.dataFetcher.getDataURLForPath(pathBase + "/Images/Shadow.png"));
+		const shadowTexturePromise = context.dataFetcher.fetchData(pathBase + "/Images/Shadow.tga")
+			.then(loadTextureFromTGA)
+			.then(convertGreyscaleTextureToAlphaMap);
 
 		const [terrainModel, objectList] = await terrainPromise;
 
@@ -1505,7 +1518,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 		// fixup shadow texture
 		const globalModels = await globalModelsPromise;
-		globalModels[1][0].texture = await shadowTexturePromise;		
+		globalModels[1][0].texture = await shadowTexturePromise;
 
 		const assets : RawAssets = {
 			globalModels : globalModels,

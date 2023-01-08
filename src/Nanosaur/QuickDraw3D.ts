@@ -25,15 +25,20 @@ export type Qd3DMesh = {
 	boneIds? : Uint8Array,
 };
 
+export enum AlphaType {
+	Opaque,
+	OneBitAlpha,
+	Translucent
+}
 export type Qd3DTexture = {
 	width : number;
 	height : number;
 	numTextures : number; // > 1 for array textures
 	pixelFormat : GfxFormat; // commonly GfxFormat.U16_RGBA_5551;
-	hasAlpha : boolean;
+	alpha : AlphaType;
 	wrapU : GfxWrapMode;
 	wrapV : GfxWrapMode;
-	pixels: Uint16Array | Uint8Array | Uint8ClampedArray;
+	pixels: Uint16Array | Uint8Array;
 };
 
 // converts U16_RGBA_1555 pixels to U16_RGBA_5551
@@ -74,32 +79,243 @@ function addEdgePadding(pixels : Uint16Array, width : number, height : number){
 	}
 }
 
-export function loadTextureFromImage(urlPath : string) : Promise<Qd3DTexture>{
-	const img = document.createElement("img");
-	//img.crossOrigin = "anonymous";
-	img.src = urlPath;
-	return new Promise((resolve, err)=>{
-		img.onerror = err;
-		img.onload = ()=>{
-			const canvas = document.createElement("canvas");
-			canvas.width = img.width;
-			canvas.height = img.height;
-			const ctx = canvas.getContext("2d")!;
-			ctx.drawImage(img, 0, 0);
-			const pixels = ctx.getImageData(0, 0, img.width, img.height);
+// todo: find a better file for this
+export function loadTextureFromTGA(buffer : ArrayBufferSlice) : Qd3DTexture {
 
-			resolve({
-				width : img.width,
-				height : img.height,
-				numTextures : 1,
-				pixelFormat : GfxFormat.U8_RGBA_NORM,
-				hasAlpha : false,
-				wrapU : GfxWrapMode.Clamp,
-				wrapV : GfxWrapMode.Clamp,
-				pixels: pixels.data
-			});
+	const footerMagic = readString(buffer, buffer.byteLength - 18, 18, false);
+	assert(footerMagic === "TRUEVISION-XFILE.\0", "not a TGA file!");
+
+	const data = buffer.createDataView();
+
+	// read file header
+	const idLength = data.getUint8(0);
+	const colourMapType = data.getUint8(1);
+	const imageType = data.getUint8(2);
+	// read colour map spec
+	const colourMapFirstEntryIndex = data.getUint16(3, true);
+	const colourMapNumEntries = data.getUint16(5, true);
+	const colourMapEntrySizeBits = data.getUint8(7)
+	// read image spec
+	//const xOrigin = data.getUint16(8, true);
+	//const yOrigin = data.getUint16(10, true);
+	const width = data.getUint16(12, true);
+	const height = data.getUint16(14, true);
+	const pixelIndexDepth = data.getUint8(16);
+	const imageDescriptor = data.getUint8(17);
+
+
+	const alphaChannelDepth = imageDescriptor & 0xF;
+	const rightToLeft = (imageDescriptor & 0x10) !== 0;
+	const topToBottom = (imageDescriptor & 0x20) !== 0;
+
+	const imageFormat = imageType & 0x7;
+	const usesRLE = (imageType & 0x08) !== 0;
+	const usesColourMap = imageFormat === 1;
+	const greyscale = imageFormat === 3;
+
+	const colourMapEntrySize = Math.ceil(colourMapEntrySizeBits / 8);
+	const bytesPerPixelIndex = Math.ceil(pixelIndexDepth / 8);
+	const bytesPerPixel = usesColourMap ? colourMapEntrySize : bytesPerPixelIndex;
+
+	assert(colourMapType <= 1, "Unsupported TGA colour map type");
+	assert(!usesColourMap || (colourMapType === 1), "TGA missing required colour map");
+	assert(imageType !== 0, "TGA has no image data");
+	assert(imageType <= 3 || (imageType >= 9 && imageType <= 11), "Unsupported TGA image type");
+	assert((imageDescriptor & 0xC0) === 0, "Unsupported TGA image settings");
+	if (usesColourMap){
+		assert(bytesPerPixelIndex >= 1 && bytesPerPixelIndex <= 4 && bytesPerPixelIndex !== 3, "Unsupported TGA pixel index size");
+		assert(colourMapEntrySize > 0 && (greyscale || colourMapEntrySize !== 1) && colourMapEntrySize <= 4, "Unsupported TGA colour map entry size");
+	}
+
+	// todo: flip
+	assert(!rightToLeft && topToBottom, "Flipped TGA images not implemented!");
+
+	let alpha : AlphaType;
+	switch(alphaChannelDepth){
+		case 0: alpha = AlphaType.Opaque; break;
+		case 1: alpha = AlphaType.OneBitAlpha; break;
+		case 8: alpha = AlphaType.Translucent; break;
+		default: assert(false, "Unsupported TGA alpha bit-depth");
+	}
+
+	function choosePixelFormat(greyscale : boolean, alpha : AlphaType, bytesPerPixel : number) : GfxFormat | false {
+		if (greyscale){
+			if (alpha === AlphaType.Opaque){
+				switch(bytesPerPixel){
+					case 1: return GfxFormat.U8_R_NORM; // probably the only correct one
+					case 2: return GfxFormat.U16_R_NORM;
+					case 4: return GfxFormat.U32_R;
+					default: return false;
+				}
+			} else {
+				// todo: expand to rbga ourselves?
+				return -1;
+			}
+		} else { // colour
+			switch(alpha){
+				case AlphaType.Opaque: {
+					switch(bytesPerPixel){
+						case 2: return GfxFormat.U16_RGB_565; // probably incorrect
+						case 3: return GfxFormat.U8_RGB_NORM;
+						default: return false;
+					}
+				}
+				case AlphaType.OneBitAlpha: {
+					if (bytesPerPixel === 2)
+						return GfxFormat.U16_RGBA_5551;
+					else
+						return false;
+				}
+				case AlphaType.Translucent: {
+					if (bytesPerPixel === 4)
+						return GfxFormat.U8_RGBA_NORM;
+					else
+						return false;
+				}
+			}
 		}
-	});
+	}
+
+	const pixelFormat = choosePixelFormat(greyscale, alpha, bytesPerPixel);
+	assert(pixelFormat !== false, "Unsupported TGA pixel format");
+
+	const colourMapDataStart = 18 + idLength;
+	const colourMapSizeBytes = colourMapNumEntries * colourMapEntrySize;
+	const colourMap = usesColourMap ? buffer.createTypedArray(Uint8Array, colourMapDataStart, colourMapSizeBytes) : undefined;
+	const imageDataStart = colourMapDataStart + colourMapSizeBytes;
+
+
+	function getMapIndex(offset : number){
+		let index : number;
+		switch(bytesPerPixelIndex){
+			case 1: index = data.getUint8(offset); break;
+			case 2: index = data.getUint16(offset, true); break;
+			case 4: index = data.getUint32(offset, true); break;
+		}
+		return (index! - colourMapFirstEntryIndex) * colourMapEntrySize;
+	}
+
+	// read pixels
+	const numPixels = width * height;
+	const numPixelBytes = numPixels * bytesPerPixel;
+	let pixels : Uint8Array;
+	let offset = imageDataStart;
+	if (!usesRLE){
+		if (!usesColourMap){
+			pixels = buffer.createTypedArray(Uint8Array, imageDataStart, numPixelBytes);
+		} else { // colour map with no RLE
+			pixels = new Uint8Array(numPixelBytes);
+			for (let pixelIndex = 0; pixelIndex < numPixels; ++pixelIndex){
+				const mapIndex = getMapIndex(offset);
+				offset += bytesPerPixelIndex;
+				for (let j = 0; j < bytesPerPixel; ++j){
+					pixels[pixelIndex * bytesPerPixel + j] = colourMap![mapIndex + j];
+				}
+			}
+		}
+	} else { // uses RLE
+		pixels = new Uint8Array(numPixelBytes);
+		let pixelIndex = 0;
+		const templatePixel = [0,0,0,0];
+
+		if (usesColourMap){
+			while (pixelIndex < numPixels){
+				const packetHeader = data.getUint8(offset);
+				offset++;
+				const packetLength = (packetHeader & 0x7F) + 1; // how many pixels this packet represents
+				if (packetHeader & 0x80){ // RLE
+					const mapIndex = getMapIndex(offset);
+					offset += bytesPerPixelIndex;
+
+					for (let i = 0; i < packetLength; ++i){
+						for (let j = 0; j < bytesPerPixel; ++j){
+							pixels[(pixelIndex + i) * bytesPerPixel + j] = colourMap![mapIndex + j]
+						}
+					}
+					pixelIndex += packetLength;
+				} else { // raw
+					for (let i = 0; i < packetLength; ++i){
+						const mapIndex = getMapIndex(offset);
+						offset += bytesPerPixelIndex;
+						for (let j = 0; j < bytesPerPixel; ++j){
+							pixels[(pixelIndex + i) * bytesPerPixel + j] = colourMap![mapIndex + j];
+						}
+					}
+					pixelIndex += packetLength;
+				}
+			}
+		} else { // no colour map
+			while (pixelIndex < numPixels){
+				const packetHeader = data.getUint8(offset);
+				offset++;
+				const packetLength = (packetHeader & 0x7F) + 1; // how many pixels this packet represents
+				const packetByteLength = packetLength * bytesPerPixel;
+				if (packetHeader & 0x80){ // RLE
+					for (let i = 0; i < bytesPerPixel; ++i)
+						templatePixel[i] = data.getUint8(offset++);
+
+					for (let i = 0; i < packetLength; ++i){
+						for (let j = 0; j < bytesPerPixel; ++j){
+							pixels[(pixelIndex + i) * bytesPerPixel + j] = templatePixel[j];
+						}
+					}
+					pixelIndex += packetLength;
+				} else { // raw
+					for (let i = 0; i < packetByteLength; ++i){
+						pixels[pixelIndex * bytesPerPixel + i] = data.getUint8(offset + i);
+					}
+					offset += packetByteLength;
+					pixelIndex += packetLength;
+				}
+			}
+		}
+	}
+
+	// swizzle
+	if (bytesPerPixel === 2){ 
+		for (let i = 0; i < numPixelBytes; i += 2){
+			const value = pixels[i];
+			pixels[i] = pixels[i+1];
+			pixels[i+1] = value;
+		}
+	} else if (bytesPerPixel === 3 || bytesPerPixel === 4) {
+		// BGR or BGRA
+		for (let i = 0; i < numPixelBytes; i += bytesPerPixel){
+			const b = pixels[i];
+			pixels[i] = pixels[i+2];
+			pixels[i+2] = b;
+		}
+	}
+
+	return {
+		width,
+		height,
+		pixels,
+		numTextures : 1,
+		wrapU : GfxWrapMode.Repeat,
+		wrapV : GfxWrapMode.Repeat,
+		alpha,
+		pixelFormat
+	}
+}
+
+export function convertGreyscaleTextureToAlphaMap(texture : Qd3DTexture) : Qd3DTexture {
+	assert(texture.pixelFormat === GfxFormat.U8_R_NORM, "unsupported pixel format");
+	texture.alpha = AlphaType.Translucent;
+	texture.pixelFormat = GfxFormat.U8_RGBA_NORM;
+	const numPixels = texture.width * texture.height;
+	const numBytes = numPixels * 4;
+	const src = texture.pixels;
+	const dst = new Uint8Array(numBytes);
+	for (let i = 0; i < numPixels; ++i){
+		const v = src[i];
+		dst[i * 4    ] = v;
+		dst[i * 4 + 1] = v;
+		dst[i * 4 + 2] = v;
+		dst[i * 4 + 3] = v;
+	}
+	texture.pixels = dst;
+	return texture;
 }
 
 export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
@@ -315,7 +531,7 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 						pixels : undefined!,
 						width : 0,
 						height : 0,
-						hasAlpha : false,
+						alpha : AlphaType.Opaque,
 						wrapU : GfxWrapMode.Repeat,
 						wrapV : GfxWrapMode.Repeat,
 					};
@@ -344,7 +560,7 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 				let width : number;
 				let height : number;
 				let rowBytes : number;
-				let pixelType : PixelType;
+				let pixelType : QD3DPixelType;
 				let bitOrder : number;
 				let byteOrder : number;
 
@@ -381,7 +597,7 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 				}
 				assert(bitOrder === 0 && byteOrder === 0, "big endian only");
 				
-				const enum PixelType {
+				const enum QD3DPixelType {
 					RGB32 = 0,
 					ARGB32 = 1,
 					RGB16 = 2,
@@ -390,10 +606,27 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 					RGB24 = 5
 				}
 
-				assert(pixelType === PixelType.RGB16 || pixelType === PixelType.ARGB16, "todo: unsupported texture pixel format");
-				const bytesPerPixel = 2;
-
-				currentTexture.hasAlpha = pixelType === PixelType.ARGB16;
+				
+				let bytesPerPixel : number;
+				switch(pixelType){
+					case QD3DPixelType.ARGB32:
+						bytesPerPixel = 4;
+						currentTexture.alpha = AlphaType.Translucent;
+						currentTexture.pixelFormat = GfxFormat.U8_RGBA_NORM;
+						break;
+					case QD3DPixelType.RGB16:
+						bytesPerPixel = 2;
+						currentTexture.alpha = AlphaType.Opaque;
+						currentTexture.pixelFormat = GfxFormat.U16_RGBA_5551;
+						break;
+					case QD3DPixelType.ARGB16:
+						bytesPerPixel = 2;
+						currentTexture.alpha = AlphaType.OneBitAlpha;
+						currentTexture.pixelFormat = GfxFormat.U16_RGBA_5551;
+						break;
+					default:
+						assert(false, "Pixel type not implemented!");
+				}
 				
 				let pixels : Uint16Array;
 
@@ -410,15 +643,13 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 				}
 
 				
-				swizzle1555Pixels(pixels, currentTexture.hasAlpha);
-				if (currentTexture.hasAlpha)
+				swizzle1555Pixels(pixels, currentTexture.alpha !== AlphaType.Opaque);
+				if (currentTexture.alpha === AlphaType.OneBitAlpha)
 					addEdgePadding(pixels, width, height);
 
 				currentTexture.width = width;
 				currentTexture.height = height;
 				currentTexture.pixels = pixels
-				currentTexture.pixelFormat = GfxFormat.U16_RGBA_5551;
-
 				
 				offset += imageSize;
 				break;

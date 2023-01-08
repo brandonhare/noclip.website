@@ -6,7 +6,7 @@ import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { MathConstants } from "../MathHelpers";
 import { assert } from "../util";
-import { Qd3DMesh, swizzle1555Pixels, Qd3DTexture } from "./QuickDraw3D";
+import { Qd3DMesh, swizzle1555Pixels, Qd3DTexture, AlphaType } from "./QuickDraw3D";
 
 export const enum ObjectType {
 	Player,
@@ -608,7 +608,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		height: 32,
 		numTextures,
 		pixelFormat: GfxFormat.U16_RGBA_5551,
-		hasAlpha: false,
+		alpha: AlphaType.Opaque,
 		wrapU: GfxWrapMode.Mirror,
 		wrapV: GfxWrapMode.Mirror,
 		pixels: terrainPixels,
