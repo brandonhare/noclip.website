@@ -104,59 +104,69 @@ layout(location = ${Program.a_TextureIds}) in float a_TextureId;
 layout(location = ${Program.a_BoneIds}) in float a_BoneId;
 
 out vec4 v_Colour;
-out vec3 v_Normal;
 out vec2 v_UV;
 flat out int v_Id;
 
 ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
-	v_Colour = vec4(a_Colour, 1.0);
 	v_UV = a_UV;
 	#ifdef TILEMAP
 		v_UV = a_Position.xz;
 		v_Id = int(a_TextureId);
 	#endif
 
-	vec3 pos = a_Position;
-	vec3 normal = a_Normal;
+	vec3 localPos = a_Position;
+	vec3 localNormal = a_Normal;
 
 	#ifdef SKINNED
 		int boneId = int(a_BoneId);
 
-		pos = Mul(u_Bones[boneId], vec4(pos, 1.0));
-		//normal = normalize(MulNormalMatrix(u_Bones[boneId.y], normal));
-		normal = Mul(u_Bones[boneId], vec4(normal, 0.0));
+		localPos = Mul(u_Bones[boneId], vec4(localPos, 1.0));
+		//localNormal = MulNormalMatrix(u_Bones[boneId], localNormal);
+		localNormal = Mul(u_Bones[boneId], vec4(localNormal, 0.0));
 	#endif
 	
-	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(pos, 1.0));
-	vec3 worldNormal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, normal));
+	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(localPos, 1.0));
+	vec3 worldNormal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, localNormal));
 
 	#ifdef REFLECTIVE
 		v_UV = normalize(reflect(u_CameraPos.xyz - worldPos, worldNormal)).xy * 0.5 + 0.5;
 	#endif
 
-	v_Normal = worldNormal;
+
+	vec4 colour = u_Colour;
+	#ifdef HAS_VERTEX_COLOURS
+		colour *= a_Colour;
+	#endif
+
+	#ifndef UNLIT
+		vec3 lightColour = u_AmbientColour.xyz;
+		for (int i = 0; i < NUM_LIGHTS; ++i){
+			lightColour += max(0.0, dot(u_Lights[i].direction.xyz, worldNormal)) * u_Lights[i].colour.xyz;
+		}
+		colour.xyz *= lightColour;
+	#endif
+
+	v_Colour = colour;
     gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
 }
 `;
 	override frag = 
 `
 #ifdef TILEMAP
-precision mediump float;
-precision lowp sampler2DArray;
-uniform sampler2DArray u_TilemapTexture;
-flat in int v_Id;
+	precision mediump float;
+	precision lowp sampler2DArray;
+	uniform sampler2DArray u_TilemapTexture;
+	flat in int v_Id;
 #else
-uniform sampler2D u_Texture;
+	uniform sampler2D u_Texture;
 #endif
 in vec4 v_Colour;
 in vec2 v_UV;
-in vec3 v_Normal;
 
 void main(){
-	vec4 colour = u_Colour;
-	
+	vec4 colour = v_Colour;
 	
 	#ifdef HAS_TEXTURE
 
@@ -236,18 +246,6 @@ void main(){
 		#endif // end ifdef tilemap
 	#endif
 	
-	#ifdef HAS_VERTEX_COLOURS
-		colour *= v_Colour;
-	#endif
-
-	#ifndef UNLIT
-		vec3 normal = normalize(v_Normal);
-		vec3 lightColour = u_AmbientColour.xyz;
-		for (int i = 0; i < NUM_LIGHTS; ++i){
-			lightColour += max(0.0, dot(u_Lights[i].direction.xyz, normal)) * u_Lights[i].colour.xyz;
-		}
-		colour.xyz *= lightColour;
-	#endif
 
 	gl_FragColor = colour;
 }
