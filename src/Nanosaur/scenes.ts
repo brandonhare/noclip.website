@@ -712,6 +712,7 @@ class ShadowEntity extends Entity {
 		this.scale[0] = scaleX;
 		this.scale[2] = scaleZ;
 		this.position[1] += 0.5;
+		parent.shadow = this;
 		this.updateShadow(parent);
 	}
 	updateShadow(parent : Entity){
@@ -836,7 +837,6 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	},
 	spawnTriceratops, // 2
 	function spawnRex(def, assets){ // 3
-		// todo: rotation
 		const title = def.param0 === 1; // title hack
 		const rex = new AnimatedEntity(assets.skeletons.Rex!, [def.x, def.y, def.z], def.rot ?? null, def.scale ?? 1.2, false, title ? 1 : 0);
 
@@ -973,8 +973,16 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 
 		class PteranodonEntity extends AnimatedEntity {
 			rock? : Entity = undefined;
+			startY = 0;
+			t = Math.random() * MathConstants.TAU;
 
 			override update(dt : number) {
+
+				this.t = (this.t + dt * 2) % MathConstants.TAU;
+				const y = this.startY + (this.rock ? 300 : 200) + Math.cos(this.t) * 150;
+				this.position[1] = y;
+				this.updateMatrix();
+
 				super.update(dt);
 
 				if (this.rock){
@@ -987,12 +995,12 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 		};
 
 		const hasRock = (def.param3 & (1<<1)) !== 0;
-		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y + 100, def.z], null, 1, false, hasRock ? 2 : 0);
+		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y, def.z], null, 1, false, hasRock ? 2 : 0);
+		ptera.startY = def.y;
 		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
 		const results : Entity[] = [ptera, new ShadowEntity(assets, ptera, 4, 4.5)];
 		if (hasRock) {
-			// todo attach
-			const rock = new Entity(assets.level1Models[9], [def.x, def.y + 100, def.z], 0, 0.4, false);
+			const rock = new Entity(assets.level1Models[9], [def.x, def.y, def.z], 0, 0.4, false);
 			ptera.rock = rock;
 			results.push(rock);
 		}
@@ -1058,9 +1066,9 @@ const EntityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=
 	function spawnBush(def, assets){ // 13
 		const bush = new Entity(assets.level1Models[11], [def.x, def.y, def.z], null, 4.2, true);
 		if (def.param3 & 1){
-			const result : Entity[] = spawnTriceratops(def, assets);
-			result.push(bush);
-			return result;
+			const results : Entity[] = spawnTriceratops(def, assets);
+			results.push(bush);
+			return results;
 		}
 		return bush;
 	},
