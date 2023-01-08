@@ -742,14 +742,14 @@ class AnimatedEntity extends Entity{
 
 	debugDrawSkeleton(clipFromWorldMatrix : mat4){
 		
-		const bones = this.animationController.animation.bones;
+		const boneParentIDs = this.animationController.animation.boneParentIDs;
 		const transforms = this.animationController.boneTransforms;
 		const c = getDebugOverlayCanvas2D();
 		const p1 : vec3 = [0,0,0];
 		const p2 : vec3 = [0,0,0];
 
-		for (let i = 0; i < bones.length; ++i){
-			const parentIndex = bones[i].parent;
+		for (let i = 0; i < boneParentIDs.length; ++i){
+			const parentIndex = boneParentIDs[i];
 			if (parentIndex < 0)
 				continue;
 			
@@ -1325,7 +1325,7 @@ class NanosaurSceneRenderer implements Viewer.SceneGfx{
 
         const renderInstManager = this.renderHelper.renderInstManager;
 
-		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
+		const dt = viewerInput.deltaTime * 0.001;
 		for (let i = 0; i < this.entities.length; ++i){
 			const entity = this.entities[i];
 			const visible = entity.checkVisible(viewerInput.camera.frustum);

@@ -3,7 +3,7 @@ import { assert, readString } from "../util";
 import { ResourceFork } from "./AppleDouble";
 import { mat4, quat, vec3 } from "gl-matrix";
 import { Endianness } from "../endian";
-import { clamp, invlerp, quatFromEulerRadians } from "../MathHelpers";
+import { lerp, clamp, invlerp, quatFromEulerRadians } from "../MathHelpers";
 
 
 
@@ -15,28 +15,12 @@ export type SkeletalMesh = {
 export type AnimationData = {
 	numBones : number,
 	numAnims : number,
-	bones : Bone[],
+	//bones : Bone[],
+	boneParentIDs : number[],
 	//relativePointOffsets : Float32Array,
 	//decomposedPointList : PointRef[],
 	//decomposedNormalList : vec3[],
 	anims : Anim[],
-};
-
-export enum AnimEventType {
-	Stop,
-	Loop,
-	ZigZag,
-	GotoMarker,
-	SetMarker,
-	PlaySound,
-	SetFlag,
-	ClearFlag,
-};
-
-export type AnimEvent = {
-	time : number,
-	type : AnimEventType,
-	value : number
 };
 
 export const enum AccelerationMode {
@@ -52,20 +36,19 @@ export type AnimKeyframe = {
 	rotation: vec3,
 	scale : vec3
 };
+export const enum AnimLoopMode {
+	Stop,
+	Loop,
+	ZigZag,
+};
 export type Anim = {
 	name : string,
-	events : AnimEvent[],
 	keyframes : AnimKeyframe[][], // [bone][keyframe]
+	endTime : number,
+	loopMode : AnimLoopMode,
+	loopStartTime : number,
 };
 
-type Bone = {
-	parent : number,
-	//children : number[],
-	//name : string,
-	pos : vec3,
-	//pointList : Uint16Array,
-	//normalList : Uint16Array,
-};
 
 function readVec3(view : DataView, offset : number) : vec3{
 	return [
@@ -163,7 +146,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 	assert(relativePointOffsets !== undefined);
 	assert(relativePointOffsets.length === numDecomposedPoints * 3);
 
-	const bones : Bone[] = new Array(numJoints);
+	const boneParentIDs : number[] = new Array(numJoints);
 	for (let boneIndex = 0; boneIndex < numJoints; ++boneIndex){
 		const bone = skeletonData.get("Bone")?.get(1000 + boneIndex);
 		assert(bone !== undefined);
@@ -172,7 +155,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 		const parent = data.getInt32(0);
 		//const nameLength = data.getUint8(4);
 		//const name = readString(bone, 5, Math.min(32, nameLength), false);
-		const pos = readVec3(data, 36);
+		//const pos = readVec3(data, 36);
 		const numPointsAttachedToBone = data.getInt16(48);
 		//const numNormalsAttachedToBone = data.getInt16(50);
 
@@ -181,12 +164,16 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 		assert(pointList !== undefined);
 		//assert(normalList !== undefined);
 
+		assert(parent < boneIndex, "bone has parent out of order");
+
 		/*
 		if (parent >= 0 && parent < boneIndex){
 			bones[parent].children.push(boneIndex);
 		} else assert(parent === -1);
 		*/
-
+		
+		boneParentIDs[boneIndex] = parent;
+		/*
 		bones[boneIndex] = {
 			parent,
 			//children : [],
@@ -195,6 +182,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 			//pointList,
 			//normalList,
 		};
+		*/
 
 		// update mesh offsets and fill out bone attribute array
 		for (const pointId of pointList){
@@ -209,12 +197,23 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 
 				mesh.boneIds![pointIndex] = boneIndex;
 				
-				mesh.vertices[pointIndex * 3] = relativePointOffsets[pointId * 3];
+				mesh.vertices[pointIndex * 3    ] = relativePointOffsets[pointId * 3];
 				mesh.vertices[pointIndex * 3 + 1] = relativePointOffsets[pointId * 3 + 1];
 				mesh.vertices[pointIndex * 3 + 2] = relativePointOffsets[pointId * 3 + 2];
 			}
 		}
 	}
+
+	const enum AnimEventType {
+		Stop,
+		Loop,
+		ZigZag,
+		GotoMarker,
+		SetMarker,
+		PlaySound,
+		SetFlag,
+		ClearFlag,
+	};
 
 	const anims = new Array<Anim>(numAnims);
 
@@ -226,29 +225,41 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 		const animName = readString(animHeader, 1, Math.min(32, headerData.getUint8(0)), false);
 		const numEvents = headerData.getUint16(34);
 
-		const eventArray = new Array<AnimEvent>(numEvents);
+		//const eventArray = new Array<AnimEvent>(numEvents);
 
-		const keyframeArray : AnimKeyframe[][] = new Array(numJoints);
-
-		const anim = {
-			name : animName,
-			events : eventArray,
-			keyframes : keyframeArray,
-		};
-		anims[i] = anim;
+		let loopMode = AnimLoopMode.Stop;
+		let loopStartTime = 0;
+		let endTime = 0;
 
 		// get events
 		const events = skeletonData.get("Evnt")?.get(1000 + i)?.createDataView();
 		assert(events !== undefined);
 		for (let j = 0; j < numEvents; ++j){
-			const time = events.getUint16(j * 4);
-			const type = events.getUint8(j * 4 + 2);
-			const value = events.getUint8(j * 4 + 3);
-			eventArray[j] = {time, type, value};
+			const time = events.getUint16(j * 4) / 30;
+			const type = events.getUint8(j * 4 + 2) as AnimEventType;
+
+			switch(type){
+				case AnimEventType.SetMarker:
+					loopStartTime = time;
+					break;
+				case AnimEventType.Loop:
+					loopMode = AnimLoopMode.Loop;
+					endTime = time;
+					break;
+				case AnimEventType.ZigZag:
+					loopMode = AnimLoopMode.ZigZag;
+					endTime = time;
+					break;
+			}
+
+			//const value = events.getUint8(j * 4 + 3);
+			
+			//eventArray[j] = {time, type, value};
 		}
 
 
 		// get keyframes
+		const keyframeArray : AnimKeyframe[][] = new Array(numJoints);
 		const keyframeCountData = skeletonData.get("NumK")?.get(1000+i)?.createDataView();
 		assert(keyframeCountData !== undefined);
 		for (let boneIndex = 0; boneIndex < numJoints; ++boneIndex){
@@ -259,8 +270,11 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 			const keyframeData = skeletonData.get("KeyF")?.get(1000 + (i * 100) + boneIndex)?.createDataView();
 			assert(keyframeData !== undefined);
 			for (let keyframeIndex = 0; keyframeIndex < numKeyframes; ++keyframeIndex){
+				const tick = keyframeData.getInt32(keyframeIndex * 44 + 0) / 30;
+				if (loopMode === AnimLoopMode.Stop && tick > endTime)
+					endTime = tick;
 				keyframes[keyframeIndex] = {
-					tick : keyframeData.getInt32(keyframeIndex * 44 + 0),
+					tick,
 					accelerationMode : keyframeData.getInt32(keyframeIndex * 44 + 4),
 					coord : readVec3(keyframeData, keyframeIndex * 44 + 8),
 					rotation : readVec3(keyframeData, keyframeIndex * 44 + 20),
@@ -269,6 +283,14 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 			}
 		}
 		
+		anims[i] = {
+			name : animName,
+			keyframes : keyframeArray,
+			endTime,
+			loopMode,
+			loopStartTime,
+		};
+		
 	}
 
 	return {
@@ -276,7 +298,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 		animation : {
 			numBones : numJoints,
 			numAnims,
-			bones,
+			boneParentIDs,
 			//relativePointOffsets,
 			//decomposedPointList,
 			//decomposedNormalList,
@@ -294,41 +316,30 @@ export class AnimationController {
 	currentAnimation = 0;
 	t = 0;
 	animSpeed = 1;
-	loopbackTime = 0;
 	animDirection = 1; // 1 or -1
-	zigzag = false;
 	running = true;
 
 	constructor(animation : AnimationData){
 		this.animation = animation;
 		this.boneTransforms = new Array(animation.numBones);
-		for (let i = 0; i < animation.numBones; ++i){
-			this.boneTransforms[i] = mat4.fromTranslation(mat4.create(), animation.bones[i].pos);
-		}
+		for (let i = 0; i < animation.numBones; ++i)
+			this.boneTransforms[i] = mat4.create();
 	}
 
 	setAnimation(index : number, speed : number){
-		assert(index < this.animation.numAnims, "animation out of range");
+		assert(index >= 0 && index < this.animation.numAnims, "animation out of range");
 		this.currentAnimation = index;
 		this.t = 0;
 		this.animSpeed = speed;
-		this.loopbackTime = 0;
 		this.animDirection = 1;
-		this.zigzag = false;
 		this.running = true;
 	}
 
 	setRandomTime(){
-		for (const event of this.animation.anims[this.currentAnimation].events){
-			if (event.type === AnimEventType.Loop || event.type === AnimEventType.ZigZag){
-				this.t = Math.random() * event.time;
-				if (event.type === AnimEventType.ZigZag && Math.random() >= 0.5){
-					this.animDirection = -1;
-					this.zigzag = true;
-				}
-				return;
-			}
-		}
+		const anim = this.animation.anims[this.currentAnimation];
+		this.t = lerp(anim.loopStartTime, anim.endTime, Math.random());
+		if (anim.loopMode === AnimLoopMode.ZigZag && Math.random() >= 0.5)
+			this.animDirection = -1;
 	}
 
 	update(dt : number){
@@ -336,50 +347,43 @@ export class AnimationController {
 			return;
 		}
 
-		const prevT = this.t;
-		this.t += dt * 30 * this.animSpeed * this.animDirection;
+		this.t += dt * this.animSpeed * this.animDirection;
 		const anim = this.animation.anims[this.currentAnimation];
 
-		if (this.animDirection < 0 && this.t < this.loopbackTime){
-			this.t = 2 * this.loopbackTime - this.t;
-			if (this.zigzag){
-				this.animDirection = 1;
-			} else {
-				this.running = false;
-				// fall through to animate this frame
+		// apply looping
+		if (this.animDirection > 0){ // forward
+			if (this.t >= anim.endTime){
+				switch(anim.loopMode){
+					case AnimLoopMode.Stop:
+						this.t = anim.endTime;
+						this.running = false;
+						break;
+					case AnimLoopMode.Loop:
+						this.t = anim.loopStartTime + (this.t - anim.endTime);
+						break;
+					case AnimLoopMode.ZigZag:
+						this.t = anim.endTime - (this.t - anim.endTime); // reflect around end time
+						this.animDirection = -1;
+						break;
+				}
 			}
-		}
-
-		// process animation events
-		// todo: breaks on high dt
-		for (const event of anim.events){
-			if (event.time > this.t)
-				break;
-			if (prevT > event.time)
-				continue;
-			switch(event.type){
-				case AnimEventType.Stop:
-					this.running = false;
-					break;
-				case AnimEventType.SetMarker:
-					this.loopbackTime = event.time;
-					break;
-				case AnimEventType.Loop:
-					if (this.loopbackTime !== 0){
-						this.t += this.loopbackTime - event.time;
-					} else {
-						if (this.t !== 0){
-							this.t -= event.time;
-						} else {
-							this.running = false;
-						}
-					}
-					break;
-				case AnimEventType.ZigZag:
-					this.animDirection = -1;
-					this.t -= event.time - this.t;
-					this.zigzag = true;
-					break;
+		} else { // backwards
+			if (this.t <= anim.loopStartTime){
+				switch(anim.loopMode){
+					case AnimLoopMode.Stop:
+						assert(false, "Somehow ended up before start with a non-looping animation");
+						this.t = anim.loopStartTime;
+						this.running = false;
+						break;
+					case AnimLoopMode.Loop:
+						this.t = anim.loopStartTime;
+						this.running = false;
+						break;
+					case AnimLoopMode.ZigZag:
+						this.t = anim.loopStartTime + (anim.loopStartTime - this.t); // reflect around start time
+						this.animDirection = 1;
+						break;
+				}
 			}
 		}
 
@@ -389,7 +393,6 @@ export class AnimationController {
 			const myKeyframes = anim.keyframes[boneIndex];
 			const myBoneMatrix = this.boneTransforms[boneIndex];
 			if (myKeyframes.length === 0){
-				mat4.fromTranslation(myBoneMatrix, this.animation.bones[boneIndex].pos);
 				continue;
 			}
 
@@ -414,7 +417,7 @@ export class AnimationController {
 				currentKeyframe.scale
 			);
 		
-			const parentIndex = this.animation.bones[boneIndex].parent;
+			const parentIndex = this.animation.boneParentIDs[boneIndex];
 			if (parentIndex >= 0)
 				mat4.mul(myBoneMatrix, this.boneTransforms[parentIndex], myBoneMatrix);
 
