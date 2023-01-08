@@ -77,15 +77,17 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_CameraPos;
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
-	vec4 u_Time; // x = time, yzw = unused
+	vec4 u_TimeVec; // x = time, yzw = unused
 };
+#define u_Time (u_TimeVec.x)
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
 	vec4 u_Colour;
 	#ifdef SCROLL_UVS
-	vec4 u_UVScroll; // xy = uv, zw = unused
+	vec4 u_UVScrollVec; // xy = uv, zw = unused
 	#endif
 };
+#define u_UVScroll (u_UVScrollVec.xy)
 #ifdef SKINNED
 layout(std140) uniform ub_Bones {
 	Mat4x3 u_Bones[${Program.Max_Bones}];
