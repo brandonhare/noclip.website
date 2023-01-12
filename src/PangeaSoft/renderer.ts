@@ -189,58 +189,16 @@ void main(){
 			//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
 			vec2 uv = fract(v_UV);
 
-			const int TILE_FLIPX_MASK = (1<<15);
-			const int TILE_FLIPY_MASK = (1<<14);
-			const int TILE_FLIPXY_MASK = (TILE_FLIPY_MASK|TILE_FLIPX_MASK);
-			const int TILE_ROTATE_MASK = ((1<<13)|(1<<12));
-			const int TILE_ROT1 = (1<<12);
-			const int TILE_ROT2 = (2<<12);
-			const int TILE_ROT3 = (3<<12);
-
-			int flipBits = v_Id & (TILE_FLIPXY_MASK | TILE_ROTATE_MASK);
 			int textureId = v_Id & 0xFFF;
 
-			switch (flipBits) {
-				case 0:
-				case TILE_FLIPXY_MASK | TILE_ROT2:
-					break;
-				case TILE_FLIPX_MASK:
-				case TILE_FLIPY_MASK | TILE_ROT2:
-					uv.x = 1.0 - uv.x;
-					//textureId = 254;
-					break;
-				case TILE_FLIPY_MASK:
-				case TILE_FLIPX_MASK | TILE_ROT2:
-					uv.y = 1.0 - uv.y;
-					//textureId = 254;
-					break;
-				case TILE_FLIPXY_MASK:
-				case TILE_ROT2:
-					uv = 1.0 - uv;
-					//textureId = 254;
-					break;
-				case TILE_ROT1:
-				case TILE_FLIPXY_MASK | TILE_ROT3:
-					uv = vec2(uv.y, 1.0 - uv.x); // todo verify
-					//textureId = 254;
-					break;
-				case TILE_ROT3:
-				case TILE_FLIPXY_MASK | TILE_ROT1:
-					uv = vec2(1.0 - uv.y, uv.x); // todo verify
-					//textureId = 254;
-					break;
-				case TILE_FLIPX_MASK | TILE_ROT1:
-				case TILE_FLIPY_MASK | TILE_ROT3:
-					uv = vec2(1.0 - uv.y, 1.0 - uv.x); // todo verify
-					//textureId = 254;
-					break;	
-				case TILE_FLIPX_MASK | TILE_ROT3:
-				case TILE_FLIPY_MASK | TILE_ROT1:
-					uv = uv.yx; // todo verify
-					//textureId = 254;
-				default:
-					//textureId = 254;
-					break;
+			if ((v_Id & 0x1000) != 0){ // swizzle
+				uv.xy = uv.yx;
+			}
+			if ((v_Id & 0x2000) != 0){ // flip x
+				uv.x = 1.0 - uv.x;
+			}
+			if ((v_Id & 0x4000) != 0){ // flip y
+				uv.y = 1.0 - uv.y;
 			}
 
 			vec4 texColour = texture(SAMPLER_2D(u_TilemapTexture), vec3(uv, textureId));

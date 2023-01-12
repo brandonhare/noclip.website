@@ -8,12 +8,13 @@ import { assert } from "../util";
 import { parseAppleDouble } from "./AppleDouble";
 import { Assets, Entity, LevelObjectDef } from "./entity";
 import { entityCreationFunctions, invalidEntityType, ModelSetNames, ObjectType, ProcessedAssets, SkeletonNames } from "./nanosaur_entities";
-import { parseTerrain } from "./nanosaur_terrain";
+import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
 import { loadTextureFromTGA } from "./TGA";
 import { vec4 } from "gl-matrix";
+import { TerrainInfo } from "./terrain";
 
 const pathBase = "nanosaur";
 
@@ -155,10 +156,14 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData))
 		) ?? []);
 
-		const terrainPromise : Promise<[Qd3DMesh|undefined, LevelObjectDef[]]> = this.def.terrain ? Promise.all([
-			context.dataFetcher.fetchData(`${pathBase}/terrain/${this.def.terrain}.ter`),
-			context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
-		]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture)) : Promise.resolve([undefined, []]);
+			const terrainPromise 
+			: Promise<NanosaurParseTerrainResult> | [undefined, undefined, LevelObjectDef[]]
+				= this.def.terrain 
+				? Promise.all([
+						context.dataFetcher.fetchData(`${pathBase}/terrain/${this.def.terrain}.ter`),
+						context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
+					]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture))
+				: [undefined, undefined, []];
 
 		let shadowTexturePromise : Promise<Qd3DTexture> | undefined;
 		if (this.def.models.includes("Global_Models"))
@@ -166,7 +171,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 
 		const models = await modelPromises;
 		const skeletons = await skeletonPromises;
-		let [terrainModel, objects] = await terrainPromise;
+		let [terrainModel, terrainInfo, objects] = await terrainPromise;
 
 		if (this.def.objects){
 			let objArray;

@@ -102,7 +102,7 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 
 		const terrainPromise = scene.terrain
 			? context.dataFetcher.fetchData(`${pathBase}/Terrain/${scene.terrain}.ter.rsrc`)
-				.then((data)=>parseBugdomTerrain(parseAppleDouble(data)))
+				.then((data)=>parseBugdomTerrain(parseAppleDouble(data), this.def.hasCeiling))
 			: {items:[]};
 
 		const models = await modelPromises;

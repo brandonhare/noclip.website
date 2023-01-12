@@ -9,7 +9,7 @@ export type ParsedBugdomTerrain = {
 	items : LevelObjectDef[],
 }
 
-export function parseBugdomTerrain(terrainData: ResourceFork): ParsedBugdomTerrain {
+export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boolean): ParsedBugdomTerrain {
 
 	const MAP2UNIT_VALUE = 160/32;
 
@@ -36,9 +36,11 @@ export function parseBugdomTerrain(terrainData: ResourceFork): ParsedBugdomTerra
 	const numSplines = header.getUint32(36);
 	const numFences = header.getUint32(40);
 
-	// read tile image stufff
+	// read tile image stuff
 	const tileImageData = get("Timg", 1000, "tile image data").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
 	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
+
+	const numLayers = hasCeiling ? 2 : 1;
 
 	// read tiles
 	function loadTiles(buffer?: ArrayBufferSlice) {
@@ -52,8 +54,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork): ParsedBugdomTerra
 		return data;
 	}
 	const floor = loadTiles(get("Layr", 1000, "floor layer"))!;
-	const ceiling = loadTiles(terrainData.get("Layr")!.get(1001));
-	const numLayers = ceiling ? 2 : 1;
+	const ceiling = hasCeiling ? loadTiles(terrainData.get("Layr")!.get(1001)) : undefined;
 
 	// read heights
 	const yScale = TERRAIN_POLYGON_SIZE / tileSize;
@@ -72,7 +73,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork): ParsedBugdomTerra
 	}
 
 	// read splits
-	const splits = new Array(numLayers);
+	const splits : Uint8Array[] = new Array(numLayers);
 	for (let i = 0; i < numLayers; ++i) {
 		splits[i] = get("Splt", 1000 + i, "split data").createTypedArray(Uint8Array);
 	}
