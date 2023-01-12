@@ -111,7 +111,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	// load textures
 	const numTexturesInFile = pixelBuffer.createDataView().getUint32(0);
 	assert(numTexturesInFile >= maxTextureIndex);
-	const numTextures = maxTextureIndex + 1;
+	const numTextures = Math.max(maxTextureIndex + 1, 256); // include the last 2 extra ones for fun
 	const terrainPixels = pixelBuffer.createTypedArray(Uint16Array, 4, 32 * 32 * numTextures, Endianness.BIG_ENDIAN);
 	swizzle1555Pixels(terrainPixels, false);
 	const texture: Qd3DTexture = {

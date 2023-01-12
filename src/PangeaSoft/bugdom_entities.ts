@@ -2,7 +2,7 @@ import { mat4, quat, vec3 } from "gl-matrix";
 import { lerp, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, LevelObjectDef, ShadowEntity } from "./entity";
+import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef, ShadowEntity } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
 export type ProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject> & { levelType : BugdomLevelType };
@@ -52,6 +52,26 @@ export const SkeletonNames = [
 	"WingedFireAnt",
 	"WorkerBee",
 ] as const;
+
+export const BugdomModelFriendlyNames : FriendlyNames = {
+	AntHill_Models : [],
+	BeeHive_Models : [],
+	BonusScreen : [],
+	Forest_Models : [],
+	Global_Models1 : [],
+	Global_Models2 : [],
+	HighScores : [],
+	Lawn_Models1 : [],
+	Lawn_Models2 : [],
+	LevelIntro : [],
+	MainMenu : [],
+	Night_Models : [],
+	Pangea : [],
+	Pond_Models : [],
+	Title : [],
+	WinLose : [],
+};
+
 
 export const enum BugdomLevelType {
 	Lawn,

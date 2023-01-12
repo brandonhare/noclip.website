@@ -2,7 +2,7 @@ import { vec3 } from "gl-matrix";
 import { MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, LevelObjectDef, ShadowEntity } from "./entity";
+import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef, ShadowEntity } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
 export type ProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject>;
@@ -47,9 +47,31 @@ export const ModelSetNames = [
 	"Global_Models", "HighScores", "Level1_Models", "Title", "MenuInterface",
 ] as const;
 
+
 export const SkeletonNames = [
 	"Ptera", "Rex", "Stego", "Deinon", "Tricer", "Diloph",
 ] as const;
+
+
+export const NanosaurModelFriendlyNames : FriendlyNames = {
+	Global_Models : ["JetFlame", "Shadow", "Dust", "Smoke", "DinoSpit", "SonicScream", "Blaster", "HeatSeek", "HeatSeekEcho", "Explosion", "TimePortalRing", "HeatSeekPOW", "LaserPOW", "TriBlast", "TriBlastPOW", "HealthPOW", "ShieldPOW", "NukePOW", "Sonic", "Shield", "Nuke"],
+	HighScores : ["NameFrame"],
+	Level1_Models : ["BonusBox","LavaPatch","WaterPatch","Egg1","Egg2","Egg3","Egg4","Egg5","Boulder","Boulder2",["Mushroom Top", "Mushroom Stem"],"Bush","Crystal1","Crystal2","Crystal3","Nest","Tree1","Tree2","Tree3","Tree4","Tree5","Tree6","GasVent","StepStone","Pod","Spore","Firebal"],
+	Title : ["GameName", "PangeaLogo", "Background"],
+	MenuInterface : ["Quit","Options","Info","HighScores","Egg","Background"],
+
+	
+	Ptera : ["0", "Body"], // todo body items
+	Rex : ["0", "Body"],
+	Stego : ["Body"],
+	Deinon : ["Gun","GunTip","Mouth","Jetpack","Body"],
+	Tricer : ["Body"],
+	Diloph : ["0", "Body"],
+};
+for (let i = 1; i <= 43; ++i)
+	NanosaurModelFriendlyNames.HighScores.push("Letter");
+NanosaurModelFriendlyNames.HighScores.push("Cursor");
+NanosaurModelFriendlyNames.HighScores.push(["Spiral", "SpiralBackground"]);
 
 
 class SpinningEntity extends Entity {
@@ -385,6 +407,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 		const eggModel = assets.models.MenuInterface[4];
 
 		class EggEntity extends Entity {
+			override alwaysUpdate = true;
 			override update(dt : number) : false | void {
 				this.rotX += dt;
 				this.rotation += dt;
@@ -398,6 +421,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 
 		class EggSpawnerEntity extends Entity{
 			t = 0;
+			override alwaysUpdate = true;
 
 			override update(dt : number) : EggEntity | void{
 

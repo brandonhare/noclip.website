@@ -499,3 +499,54 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 
 
 
+
+
+export function textureArrayToCanvas(texture : Qd3DTexture) : HTMLCanvasElement{
+
+	const width = texture.width;
+	const height = texture.height;
+
+	const cols = Math.ceil(Math.sqrt(texture.numTextures));
+	const rows = Math.ceil(texture.numTextures / cols);
+
+	const canvas = document.createElement("canvas");
+    canvas.width = width * cols;
+    canvas.height = height * rows;
+	const ctx = canvas.getContext("2d")!;
+	const imageData = ctx.createImageData(canvas.width, canvas.height);
+	const dest = imageData.data;
+
+	const src = texture.pixels;
+
+	const textureStride = width * height;
+	const destRowStride = width * cols;
+	const destTextureStride = destRowStride * height;
+
+	assert(texture.pixelFormat === GfxFormat.U16_RGBA_5551, "other texture formats not implemented!");
+	for (let i = 0; i < texture.numTextures; ++i){
+		const srcStart = textureStride * i;
+		const destStart = Math.floor(i / rows) * destTextureStride + (i % cols) * width;
+		
+		for (let row = 0; row < height; ++row){
+			const destRowStart = destStart + row * destRowStride;
+			const srcRowStart = srcStart + row * width;
+			for (let col = 0; col < width; ++col){
+				const pixel = src[srcRowStart + col];
+				
+				const r = ((pixel >> 11) & 0b11111) * 255 / 0b11111; // r
+				const g = ((pixel >>  6) & 0b11111) * 255 / 0b11111; // g
+				const b = ((pixel >>  1) & 0b11111) * 255 / 0b11111; // b
+				const a = (pixel & 1) * 255; // a
+
+				dest[(destRowStart + col)* 4 + 0] = r;
+				dest[(destRowStart + col)* 4 + 1] = g;
+				dest[(destRowStart + col)* 4 + 2] = b;
+				dest[(destRowStart + col)* 4 + 3] = a;
+			}
+		}
+	}
+
+	ctx.putImageData(imageData, 0, 0);
+
+    return canvas;
+}

@@ -12,8 +12,6 @@ import { AnimatedObject, Cache, Program, RenderFlags, StaticObject } from "./ren
 import { AnimationController } from "./skeleton";
 
 
-
-
 export type Assets<MeshType, SkeletonType, TerrainType> = {
 	models : {
 		[name : string] : MeshType[][]
@@ -23,6 +21,20 @@ export type Assets<MeshType, SkeletonType, TerrainType> = {
 	}
 	terrain? : TerrainType
 };
+
+export type FriendlyNames = {[set:string]:(string | string[])[]};
+export function getFriendlyName(friendlyNames : FriendlyNames, modelSet : string, modelIndex : number, meshIndex : number){
+	const models = friendlyNames[modelSet];
+	let result = `${modelIndex}/${meshIndex}`;
+	if (models){
+		const model = models[modelIndex];
+		if (Array.isArray(model))
+			result = model[meshIndex];
+		else if (model)
+			result = model;
+	}
+	return `${modelSet}/${result}`;
+}
 
 export type LevelObjectDef = {
 	x : number,

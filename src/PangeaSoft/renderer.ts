@@ -23,8 +23,8 @@ import * as UI from "../ui";
 import { assert } from "../util";
 import * as Viewer from '../viewer';
 
-import { Entity, EntityUpdateResult } from "./entity";
-import { AlphaType, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
+import { Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
+import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
 import { AnimationData, SkeletalMesh } from "./skeleton";
 
 
@@ -242,7 +242,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		return program;
 	}
 
-	createTexture(texture : Qd3DTexture){
+	createTexture(texture : Qd3DTexture, name : string){
 		let result = this.textures.get(texture);
 		if (result === undefined){
 			result = this.device.createTexture({
@@ -258,21 +258,21 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			this.allTextures.push(result);
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
-			if (texture.numTextures == 1){
-				this.viewerTextures.push({
-					name : `Texture ${this.viewerTextures.length + 1}`,
-					surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)],
-				});
-				if (this.onnewtextures)
-					this.onnewtextures();
-			}
+			const canvas = texture.numTextures === 1
+				? convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)
+				: textureArrayToCanvas(texture);
+
+			this.viewerTextures.push({
+				name,
+				surfaces : [canvas],
+			});
 		}
 		return result;
 	}
 
-	createTextureMapping(texture : Qd3DTexture){
+	createTextureMapping(texture : Qd3DTexture, name : string){
 		const mapping = new TextureMapping();
-		mapping.gfxTexture = this.createTexture(texture);
+		mapping.gfxTexture = this.createTexture(texture, name);
 
 		
 		mapping.gfxSampler = this.createSampler({
@@ -325,7 +325,7 @@ export class StaticObject implements Destroyable {
 	renderFlags : RenderFlags = 0;
 	textureMapping : TextureMapping[] = [];
 
-	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh){
+	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
 		this.indexCount = mesh.numTriangles * 3;
 		this.aabb = mesh.aabb;
 		this.colour = mesh.colour;
@@ -389,7 +389,7 @@ export class StaticObject implements Destroyable {
 		if (texture){
 			assert(hasUvs || hasTilemap, "model has texture but no UVs!");
 
-			this.textureMapping.push(cache.createTextureMapping(texture));
+			this.textureMapping.push(cache.createTextureMapping(texture, name));
 
 			this.renderFlags |= RenderFlags.HasTexture;
 			if (texture.alpha === AlphaType.OneBitAlpha)
@@ -508,8 +508,10 @@ export class AnimatedObject implements Destroyable{
 	meshes : StaticObject[];
 	animationData : AnimationData;
 
-	constructor(device : GfxDevice, cache : Cache, skeleton : SkeletalMesh){
-		this.meshes = skeleton.meshes.map((mesh)=>new StaticObject(device, cache, mesh));
+	constructor(device : GfxDevice, cache : Cache, skeleton : SkeletalMesh, friendlyNames : FriendlyNames, name : string){
+		this.meshes = skeleton.meshes.map((mesh, index)=>
+			new StaticObject(device, cache, mesh, getFriendlyName(friendlyNames, name, index, 0))
+		);
 		this.animationData = skeleton.animation;
 	}
 

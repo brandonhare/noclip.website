@@ -5,9 +5,9 @@ import { SceneContext } from "../SceneBase";
 import * as Viewer from '../viewer';
 
 import { parseAppleDouble } from "./AppleDouble";
-import { BugdomLevelType, ModelSetNames, ProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
+import { BugdomLevelType, BugdomModelFriendlyNames, ModelSetNames, ProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
 import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
-import { Assets, Entity, LevelObjectDef } from "./entity";
+import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
 import { parseQd3DMeshGroup, Qd3DMesh } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
@@ -54,16 +54,19 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		
 		for (const modelSetName of Object.keys(rawAssets.models)){
 			const modelSet = rawAssets.models[modelSetName];
-			this.processedAssets.models[modelSetName] = modelSet.map((meshes)=>
-				meshes.map((mesh)=>
-					new StaticObject(device, cache, mesh)
+			this.processedAssets.models[modelSetName] = modelSet.map((meshes, index)=>
+				meshes.map((mesh, index2)=>
+					new StaticObject(device, cache, mesh, getFriendlyName(BugdomModelFriendlyNames, modelSetName, index, index2))
 				)
 			);
 		}
 		for (const skeletonName of Object.keys(rawAssets.skeletons)){
 			const skeleton = rawAssets.skeletons[skeletonName];
-			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton);
+			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton, BugdomModelFriendlyNames, skeletonName);
 		}
+
+		if (cache.onnewtextures)
+			cache.onnewtextures();
 	}
 }
 

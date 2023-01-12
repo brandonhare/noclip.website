@@ -6,8 +6,8 @@ import { SceneContext } from "../SceneBase";
 import { assert } from "../util";
 
 import { parseAppleDouble } from "./AppleDouble";
-import { Assets, Entity, LevelObjectDef } from "./entity";
-import { entityCreationFunctions, invalidEntityType, ModelSetNames, ObjectType, ProcessedAssets, SkeletonNames } from "./nanosaur_entities";
+import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
+import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, ProcessedAssets, SkeletonNames } from "./nanosaur_entities";
 import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
@@ -52,21 +52,23 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			skeletons : {},
 		}
 		
+		if (rawAssets.terrain)
+			this.processedAssets.terrain = new StaticObject(device, cache, rawAssets.terrain, "Terrain");
+
 		for (const modelSetName of Object.keys(rawAssets.models)){
 			const modelSet = rawAssets.models[modelSetName];
-			this.processedAssets.models[modelSetName] = modelSet.map((meshes)=>
-				meshes.map((mesh)=>
-					new StaticObject(device, cache, mesh)
+			this.processedAssets.models[modelSetName] = modelSet.map((meshes, index)=>
+				meshes.map((mesh, index2)=>
+					new StaticObject(device, cache, mesh, getFriendlyName(NanosaurModelFriendlyNames, modelSetName, index, index2))
 				)
 			);
 		}
+
 		for (const skeletonName of Object.keys(rawAssets.skeletons)){
 			const skeleton = rawAssets.skeletons[skeletonName];
-			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton);
+			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton, NanosaurModelFriendlyNames, skeletonName);
 		}
-		if (rawAssets.terrain)
-			this.processedAssets.terrain = new StaticObject(device, cache, rawAssets.terrain);
-		
+
 		// fixup shadow model
 		const globalModels = this.processedAssets.models.Global_Models;
 		if (globalModels){
@@ -74,6 +76,9 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			shadowModel.renderFlags |= RenderFlags.Translucent;
 			shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0;
 		}
+		
+		if (cache.onnewtextures)
+			cache.onnewtextures();
 	}
 }
 
