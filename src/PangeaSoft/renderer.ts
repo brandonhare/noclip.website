@@ -318,7 +318,7 @@ export class StaticObject implements Destroyable {
 	buffers : GfxBuffer[] = [];
 	inputLayout : GfxInputLayout;
 	inputState : GfxInputState;
-	modelMatrix? : mat4;
+	modelMatrix? : mat4 = undefined;
 	aabb : AABB;
 	colour : GfxColor;
 	scrollUVs : vec2 = [0,0];

@@ -460,7 +460,7 @@ export function parseQd3DMeshGroup(buffer : ArrayBufferSlice) : Qd3DMesh[][]{
 				const b = data.getFloat32(offset + 8);
 				offset += 12;
 				assert(r === g && g === b, "kxpr: expecing all components to be equal");
-				currentMesh.colour.r = currentMesh.colour.g = currentMesh.colour.b = currentMesh.colour.a = r;
+				currentMesh.colour.a = r;
 				break;
 			}
 			case "rfrn":{ // Refrence (into TOC)
