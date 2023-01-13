@@ -134,9 +134,10 @@ export function createTilemapIds(target : Uint16Array, tilemap : Uint16Array, wi
 	return max;
 }
 
-export function createNormalsFromHeightmap(target : Float32Array, heightmap : ArrayLike<number>, width : number, height : number, xzScale : number, heightScale : number){
+export function createNormalsFromHeightmap(target : Float32Array, heightmap : ArrayLike<number>, width : number, height : number, faceDown : boolean, xzScale : number, heightScale : number){
 	const stride = width + 1;
 	heightScale *= 0.1;
+	const up = faceDown ? -1 : 1;
 	for (let row = 0; row <= height; ++row){
 		for (let col = 0; col <= width; ++col){
 			//   --h0--
@@ -152,16 +153,16 @@ export function createNormalsFromHeightmap(target : Float32Array, heightmap : Ar
 			const x = (h3 - h1) * heightScale;
 			const z = (h0 - h2) * heightScale;
 			const magnitude = 1 / Math.hypot(x, z, 1);
-			target[baseIndex*3  ] = x * magnitude;
-			target[baseIndex*3+1] = 1 * magnitude;
-			target[baseIndex*3+2] = z * magnitude;
+			target[baseIndex*3  ] = up * x * magnitude;
+			target[baseIndex*3+1] = up * magnitude;
+			target[baseIndex*3+2] = up * z * magnitude;
 
 			// todo check scales
 		}
 	}
 }
 
-export function createIndices(heightmap : ArrayLike<number>, tilemap : ArrayLike<number>, width : number, height : number, replacedTextures : Map<number, number>, duplicatedVerts : number[]){
+export function createIndices(heightmap : ArrayLike<number>, tilemap : ArrayLike<number>, width : number, height : number, flipFaces : boolean, replacedTextures : Map<number, number>, duplicatedVerts : number[]){
 
 	const stride = width + 1;
 	const newVertBaseIndex = stride * (height + 1);
@@ -173,37 +174,67 @@ export function createIndices(heightmap : ArrayLike<number>, tilemap : ArrayLike
 		const down = vertIndex + stride;
 		const downRight = down + 1;
 
-		indexBuffer[index++] = down;
-		indexBuffer[index++] = downRight;
-		indexBuffer[index++] = vertIndex;
+		if (flipFaces){
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = vertIndex;
 
-		indexBuffer[index++] = downRight;
-		indexBuffer[index++] = right;
-		indexBuffer[index++] = vertIndex;
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = vertIndex;
+		} else {
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = vertIndex;
+
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = vertIndex;
+		}
 	}
 	function addFlipRight(vertIndex : number, right = vertIndex + 1){
 		const down = vertIndex + stride;
 		const downRight = down + 1;
 
-		indexBuffer[index++] = vertIndex;
-		indexBuffer[index++] = down;
-		indexBuffer[index++] = right;
+		if (flipFaces){
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = vertIndex;
+			indexBuffer[index++] = right;
 
-		indexBuffer[index++] = down;
-		indexBuffer[index++] = downRight;
-		indexBuffer[index++] = right;
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = right;
+		} else {
+			indexBuffer[index++] = vertIndex;
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = right;
+
+			indexBuffer[index++] = down;
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = right;
+		}
 	}
 	function addFlipDown(vertIndex : number, down = vertIndex + stride){
 		const right = vertIndex + 1;
 		const downRight = right + stride;
 
-		indexBuffer[index++] = right;
-		indexBuffer[index++] = vertIndex;
-		indexBuffer[index++] = down;
+		if (flipFaces){
+			indexBuffer[index++] = vertIndex;
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = down;
 
-		indexBuffer[index++] = downRight;
-		indexBuffer[index++] = right;
-		indexBuffer[index++] = down;
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = down;
+		} else {
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = vertIndex;
+			indexBuffer[index++] = down;
+
+			indexBuffer[index++] = downRight;
+			indexBuffer[index++] = right;
+			indexBuffer[index++] = down;
+		}
 	}
 
 

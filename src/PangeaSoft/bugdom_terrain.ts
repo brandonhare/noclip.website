@@ -116,6 +116,8 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	const meshes : Qd3DMesh[] = new Array(numLayers);
 	const infos : TerrainInfo[] = new Array(numLayers);
 	for (let layer = 0; layer < numLayers; ++layer){
+		const isCeiling = layer === 1;
+		
 		const tilesSource = loadTiles(get("Layr", 1000 + layer, "tiles"));
 
 		const heightmap =  get("YCrd", 1000 + layer, "heightmap").createTypedArray(Float32Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
@@ -133,7 +135,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 
 		const replacedTextures = new Map<number, number>();
 		const duplicatedVerts : number[] = [];
-		const indices = createIndices(heightmap, tilesSource, mapWidth, mapHeight, replacedTextures, duplicatedVerts);
+		const indices = createIndices(heightmap, tilesSource, mapWidth, mapHeight, isCeiling, replacedTextures, duplicatedVerts);
 
 		const numVertices = numVertsBase + duplicatedVerts.length;
 		const vertices = new Float32Array(numVertices * 3);
@@ -147,7 +149,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		expandVertexColours(vertexColours, vertexColoursSource);
 
 		const normals = new Float32Array(numVertices * 3);
-		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, TERRAIN_POLYGON_SIZE, yScale);
+		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, isCeiling,  TERRAIN_POLYGON_SIZE, yScale);
 		
 		// copy duplicated verts
 		for (let i = 0; i < duplicatedVerts.length; ++i){

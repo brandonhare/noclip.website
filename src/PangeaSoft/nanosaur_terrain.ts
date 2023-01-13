@@ -81,7 +81,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 
 	const replacedTextures = new Map<number, number>(); // filled by createIndices
 	const duplicatedVerts : number[] = []; // filled by createIndices
-	const indices = createIndices(heightmap, textureLayerData, terrainWidth, terrainDepth, replacedTextures, duplicatedVerts);
+	const indices = createIndices(heightmap, textureLayerData, terrainWidth, terrainDepth, false, replacedTextures, duplicatedVerts);
 
 	const numVerts = (terrainWidth + 1) * (terrainDepth + 1) + duplicatedVerts.length;
 	
@@ -91,7 +91,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	const tilemapIds = new Uint16Array(numVerts); // filled by createTilemapIds
 	const maxTextureIndex = createTilemapIds(tilemapIds, textureLayerData, terrainWidth, terrainDepth);
 	const normals = new Float32Array(numVerts * 3); // filled by createNormalsFromHeightmap
-	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, TERRAIN_POLYGON_SIZE, HEIGHT_SCALE); // todo check scales
+	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, false, TERRAIN_POLYGON_SIZE, HEIGHT_SCALE); // todo check scales
 	
 	// copy duplicated verts over
 	for (let i = 0; i < duplicatedVerts.length; ++i){
