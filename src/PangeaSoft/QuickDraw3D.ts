@@ -505,9 +505,12 @@ export function textureArrayToCanvas(texture : Qd3DTexture) : HTMLCanvasElement{
 
 	const width = texture.width;
 	const height = texture.height;
+	const count = texture.numTextures;
 
-	const cols = Math.ceil(Math.sqrt(texture.numTextures));
-	const rows = Math.ceil(texture.numTextures / cols);
+	let cols = 1;
+	while (cols * cols * 4 <= count)
+		cols *= 2;
+	const rows = Math.ceil(count / cols);
 
 	const canvas = document.createElement("canvas");
     canvas.width = width * cols;
@@ -523,26 +526,28 @@ export function textureArrayToCanvas(texture : Qd3DTexture) : HTMLCanvasElement{
 	const destTextureStride = destRowStride * height;
 
 	assert(texture.pixelFormat === GfxFormat.U16_RGBA_5551, "other texture formats not implemented!");
-	for (let i = 0; i < texture.numTextures; ++i){
+	let currentRow = 0;
+	let currentCol = 0;
+	for (let i = 0; i < count; ++i){
 		const srcStart = textureStride * i;
-		const destStart = Math.floor(i / rows) * destTextureStride + (i % cols) * width;
+		const destStart = currentRow * destTextureStride + currentCol * width;
 		
 		for (let row = 0; row < height; ++row){
 			const destRowStart = destStart + row * destRowStride;
 			const srcRowStart = srcStart + row * width;
 			for (let col = 0; col < width; ++col){
 				const pixel = src[srcRowStart + col];
-				
-				const r = ((pixel >> 11) & 0b11111) * 255 / 0b11111; // r
-				const g = ((pixel >>  6) & 0b11111) * 255 / 0b11111; // g
-				const b = ((pixel >>  1) & 0b11111) * 255 / 0b11111; // b
-				const a = (pixel & 1) * 255; // a
 
-				dest[(destRowStart + col)* 4 + 0] = r;
-				dest[(destRowStart + col)* 4 + 1] = g;
-				dest[(destRowStart + col)* 4 + 2] = b;
-				dest[(destRowStart + col)* 4 + 3] = a;
+				dest[(destRowStart + col) * 4    ] = (pixel >> 8) & 0xF8;
+				dest[(destRowStart + col) * 4 + 1] = (pixel >> 3) & 0xF8;
+				dest[(destRowStart + col) * 4 + 2] = (pixel << 2) & 0xF8;
+				dest[(destRowStart + col) * 4 + 3] = (pixel & 1) * 255;
 			}
+		}
+
+		if (++currentCol >= cols){
+			currentCol = 0;
+			++currentRow;
 		}
 	}
 

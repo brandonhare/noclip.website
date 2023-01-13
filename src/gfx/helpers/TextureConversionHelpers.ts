@@ -10,10 +10,10 @@ function setImageDataS8(dst: ImageData, src: Int8Array): void {
 function setImageDataU16_5551(dst: ImageData, src: Uint16Array): void{
     for (let i = 0; i < src.length; i++){
         const pixel = src[i];
-        dst.data[i * 4    ] = ((pixel >> 11) & 0b11111) * 255 / 0b11111; // r
-        dst.data[i * 4 + 1] = ((pixel >>  6) & 0b11111) * 255 / 0b11111; // g
-        dst.data[i * 4 + 2] = ((pixel >>  1) & 0b11111) * 255 / 0b11111; // b
-        dst.data[i * 4 + 3] = (pixel & 1) * 255; // a
+        dst.data[i * 4    ] = (pixel >> 8) & 0xF8;
+        dst.data[i * 4 + 1] = (pixel >> 3) & 0xF8;
+        dst.data[i * 4 + 2] = (pixel << 2) & 0xF8;
+        dst.data[i * 4 + 3] = (pixel & 1) * 255;
     }
 }
 

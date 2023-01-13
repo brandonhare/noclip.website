@@ -258,14 +258,17 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			this.allTextures.push(result);
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
-			const canvas = texture.numTextures === 1
-				? convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)
-				: textureArrayToCanvas(texture);
-
-			this.viewerTextures.push({
-				name,
-				surfaces : [canvas],
-			});
+			if (texture.numTextures === 1){
+				this.viewerTextures.push({
+					name,
+					surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)],
+				});
+			} else {
+				this.viewerTextures.push({
+					name: `${name} (${texture.numTextures} tiles)`,
+					surfaces : [textureArrayToCanvas(texture)],
+				});
+			}
 		}
 		return result;
 	}

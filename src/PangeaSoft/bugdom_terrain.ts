@@ -84,7 +84,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	const texture : Qd3DTexture = {
 		width : textureTileSize,
 		height : textureTileSize,
-		numTextures : numTilesInList, // updated after meshes are read
+		numTextures : numTilesInList,
 		pixelFormat : GfxFormat.U16_RGBA_5551,
 		alpha : AlphaType.Opaque,
 		wrapU: GfxWrapMode.Mirror,
@@ -92,7 +92,8 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		pixels : tileImageData,
 	};
 
-	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, 0, numTilesInList, Endianness.BIG_ENDIAN);
+	const tileImageTranslationTableBase = get("Xlat", 1000, "tile->image translation table");
+	const tileImageTranslationTable = tileImageTranslationTableBase.createTypedArray(Uint16Array, 0, Math.min(0xFFF, tileImageTranslationTableBase.byteLength / 2), Endianness.BIG_ENDIAN);
 	
 	const numLayers = hasCeiling ? 2 : 1;
 
@@ -101,7 +102,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		const data = buffer.createTypedArray(Uint16Array, 0, mapWidth * mapHeight, Endianness.BIG_ENDIAN);
 		for (let i = 0; i < data.length; ++i) {
 			let tile = data[i];
-			tile = (tile & ~0xFFF) | tileImageTranslationTable[tile & 0xFFF];
+			tile = (tile & ~0xFFF) | assertExists(tileImageTranslationTable[tile & 0xFFF], "tileTranslation");
 			data[i] = convertTilemapId(tile);
 		}
 		return data;
@@ -112,7 +113,6 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 
 	
 	// load layer geometry
-	let maxTileIndex = 0;
 	const meshes : Qd3DMesh[] = new Array(numLayers);
 	const infos : TerrainInfo[] = new Array(numLayers);
 	for (let layer = 0; layer < numLayers; ++layer){
@@ -140,9 +140,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		createVerticesFromHeightmap(vertices, heightmap, mapWidth, mapHeight);
 
 		const tilemapIds = new Uint16Array(numVertices);
-		const maxLayerTileIndex = createTilemapIds(tilemapIds, tilesSource, mapWidth, mapHeight);
-		if (maxLayerTileIndex > maxTileIndex)
-			maxTileIndex = maxLayerTileIndex;
+		createTilemapIds(tilemapIds, tilesSource, mapWidth, mapHeight);
 
 		const vertexColoursSource = get("Vcol", 1000 + layer, "vertex colours").createTypedArray(Uint16Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
 		const vertexColours = new Uint8Array(numVertices * 3);
@@ -187,8 +185,6 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 
 		meshes[layer] = mesh;
 	}
-
-	texture.numTextures = maxTileIndex + 1;
 
 
 	// read items
