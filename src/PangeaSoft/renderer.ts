@@ -368,7 +368,13 @@ export class StaticObject implements Destroyable {
 			pushBuffer(mesh.vertices.buffer, 12, Program.a_Position, GfxFormat.F32_RGB);
 		const hasUvs = pushBuffer(mesh.UVs?.buffer, 8, Program.a_UVs, GfxFormat.F32_RG);
 		const hasNormals = pushBuffer(mesh.normals?.buffer, 12, Program.a_Normals, GfxFormat.F32_RGB);
-		const hasColours = pushBuffer(mesh.vertexColours?.buffer, 12, Program.a_Colours, (mesh.vertexColours?.BYTES_PER_ELEMENT === 4) ? GfxFormat.F32_RGB : GfxFormat.U16_RGBA_5551);
+		const hasColours = mesh.vertexColours !== undefined;
+		if (hasColours){
+			if (mesh.vertexColours!.BYTES_PER_ELEMENT === 4)
+				pushBuffer(mesh.vertexColours!.buffer, 12, Program.a_Colours, GfxFormat.F32_RGB);
+			else
+				pushBuffer(mesh.vertexColours!.buffer, 3, Program.a_Colours, GfxFormat.U8_RGB_NORM);
+		}
 		const hasTilemap = pushBuffer(mesh.tilemapIds?.buffer, 2, Program.a_TextureIds, GfxFormat.U16_R);
 		const isSkinned = pushBuffer(mesh.boneIds?.buffer, 1, Program.a_BoneIds, GfxFormat.U8_R);
 

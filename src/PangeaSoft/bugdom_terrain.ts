@@ -8,7 +8,7 @@ import { assert, assertExists } from "../util";
 import { ResourceFork } from "./AppleDouble";
 import { LevelObjectDef } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
-import { convertTilemapId, createIndices, createNormalsFromHeightmap, createTilemapIds, createVerticesFromHeightmap, TerrainInfo } from "./terrain";
+import { convertTilemapId, createIndices, createNormalsFromHeightmap, createTilemapIds, createVerticesFromHeightmap, expandVertexColours, TerrainInfo } from "./terrain";
 
 
 type SplineDef = {
@@ -145,8 +145,8 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			maxTileIndex = maxLayerTileIndex;
 
 		const vertexColoursSource = get("Vcol", 1000 + layer, "vertex colours").createTypedArray(Uint16Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
-		const vertexColours = new Uint16Array(numVertices);
-		vertexColours.set(vertexColoursSource);
+		const vertexColours = new Uint8Array(numVertices * 3);
+		expandVertexColours(vertexColours, vertexColoursSource);
 
 		const normals = new Float32Array(numVertices * 3);
 		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, yScale); // todo check scales
@@ -159,17 +159,17 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			const destIndex3 = destIndex * 3;
 			
 			tilemapIds[destIndex] = tilemapIds[srcIndex];
-			vertexColours[destIndex] = vertexColours[srcIndex];
 			for (let j = 0; j < 3; ++j){
 				vertices[destIndex3 + j] = vertices[srcIndex3 + j];
 				normals[destIndex3 + j] = normals[srcIndex3 + j];
+				vertexColours[destIndex3 + j] = vertexColours[srcIndex + j];
 			}
 		}
 
 		const aabb = new AABB(0, minY, 0, mapWidth * TERRAIN_POLYGON_SIZE, maxY, mapHeight * TERRAIN_POLYGON_SIZE);
 
 		const mesh : Qd3DMesh = {
-			numTriangles : mapWidth * mapHeight * 6,
+			numTriangles : mapWidth * mapHeight * 2,
 			numVertices,
 			aabb,
 			colour : { r : 1, g : 1, b : 1, a : 1 },

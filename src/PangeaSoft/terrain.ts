@@ -285,3 +285,19 @@ export function createIndices(heightmap : ArrayLike<number>, tilemap : ArrayLike
 
 	return indexBuffer;
 }
+
+export function expandVertexColours(target : Uint8Array, source : Uint16Array){
+	for (let i = 0; i < source.length; ++i){
+		const pixel = source[i];
+		// 0-1
+		/*
+		target[i * 3    ] = ((pixel >> 11) & 0x1F) / 32;
+		target[i * 3 + 1] = ((pixel >>  5) & 0x3F) / 64;
+		target[i * 3 + 2] = ((pixel      ) & 0x1F) / 32;
+		*/
+		// 0-255
+		target[i * 3    ] = (pixel >> 8) & 0xF8;
+		target[i * 3 + 1] = (pixel >> 3) & 0xFC;
+		target[i * 3 + 2] = (pixel << 3) & 0xF8;
+	}
+}
