@@ -19,7 +19,7 @@ export type Assets<MeshType, SkeletonType, TerrainType> = {
 	skeletons : {
 		[name : string] : SkeletonType
 	}
-	terrain? : TerrainType
+	terrain : TerrainType
 };
 
 export type FriendlyNames = {[set:string]:(string | string[])[]};

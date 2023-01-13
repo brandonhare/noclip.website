@@ -5,7 +5,8 @@ import { assert } from "../util";
 import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef, ShadowEntity } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
-export type ProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject> & { levelType : BugdomLevelType };
+export type BugdomProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject[]>
+	& { levelType : BugdomLevelType };
 
 export const ModelSetNames = [
 	"AntHill_Models",
@@ -82,7 +83,7 @@ export const enum BugdomLevelType {
 	Anthill
 }
 
-type BugdomNumberFunc = ((def : LevelObjectDef, assets : ProcessedAssets)=>number);
+type BugdomNumberFunc = ((def : LevelObjectDef, assets : BugdomProcessedAssets)=>number);
 type BugdomEntityDefBase = {
 	scale? : number | [number, number] | BugdomNumberFunc,
 	shadow? : boolean,
@@ -100,9 +101,9 @@ type BugdomAnimatedEntityDef = BugdomEntityDefBase & {
 	anim : number,
 	animSpeed? : number,
 }
-type BugdomEntityDef = BugdomStaticEntityDef | BugdomAnimatedEntityDef | ((def : LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void);
+type BugdomEntityDef = BugdomStaticEntityDef | BugdomAnimatedEntityDef | ((def : LevelObjectDef, assets : BugdomProcessedAssets)=>Entity|Entity[]|void);
 
-function spawnLadybug(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnLadybug(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	const results : Entity[] = [
 		// bug
 		new AnimatedEntity(assets.skeletons.LadyBug, [def.x, def.y + 100, def.z], 0, 0.9, 2),
@@ -127,7 +128,7 @@ function spawnLadybug(def : LevelObjectDef, assets : ProcessedAssets){
 	return results;
 }
 
-function spawnRock(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnRock(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	let mesh;
 	let scale;
 	switch(assets.levelType){
@@ -148,7 +149,7 @@ function spawnRock(def : LevelObjectDef, assets : ProcessedAssets){
 	}
 	return new Entity(mesh, [def.x, def.y, def.z], Math.sin(def.x) * MathConstants.TAU, scale);
 }
-function spawnGrass(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnGrass(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	let mesh;
 	let scale;
 	switch(assets.levelType){
@@ -182,7 +183,7 @@ class AntEntity extends AnimatedEntity {
 	}
 }
 
-function spawnAnt(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnAnt(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	const rockThrower = def.param0 === 1;
 	// todo shadow
 	const ant = new AntEntity(assets.skeletons.Ant, [def.x, def.y + 150, def.z], 0, 1.4, 0);
@@ -193,26 +194,26 @@ function spawnAnt(def : LevelObjectDef, assets : ProcessedAssets){
 	ant.spear = spear;
 	return [ant, spear];
 }
-function spawnDetonator(def : LevelObjectDef, assets : ProcessedAssets) {
+function spawnDetonator(def : LevelObjectDef, assets : BugdomProcessedAssets) {
 	const meshGroup = getMeshGroupFromNumber(0, assets);
 	return [
 		new Entity(assets.models[meshGroup][4 + def.param1], [def.x, def.y, def.z], 0, 1.1), // box
 		new Entity(assets.models[meshGroup][9], [def.x, def.y - 10, def.z], 0, 1.1), // plunger
 	];
 }
-function spawnSpider(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnSpider(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	const spider = new AnimatedEntity(assets.skeletons.Spider, [def.x, def.y, def.z], 0, 0.9, 0);
 	const threadType = (assets.levelType === BugdomLevelType.Forest) ? 3 : (assets.levelType === BugdomLevelType.Night ? 4 : 0)
 	const thread = new Entity(assets.models[getMeshGroupFromNumber(0, assets)][threadType], [def.x, def.y + 100, def.z], 0, 0.9);
 	return [spider, thread];
 }
-function spawnWaterValve(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnWaterValve(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	return [
 		new Entity(assets.models.AntHill_Models[0], [def.x, def.y, def.z], 0, 0.25), // valve box
 		new Entity(assets.models.AntHill_Models[1], [def.x, def.y + 100, def.z], 0, 0.25), // handle
 	];
 }
-function spawnStump(def : LevelObjectDef, assets : ProcessedAssets){
+function spawnStump(def : LevelObjectDef, assets : BugdomProcessedAssets){
 	return [
 		new Entity(assets.models.Forest_Models[6], [def.x, def.y, def.z], 0, 25), // stump
 		new Entity(assets.models.Forest_Models[7], [def.x + 130*25, def.y + 150*25, def.z], 0, 17) // hive
@@ -286,7 +287,7 @@ const entityDefs : (BugdomEntityDef | null)[] = [
 	{ meshGroup : 0, meshId : 5, scale : 4 }, // 63: king water pipe
 ];
 
-export function spawnBugdomEntity(def : LevelObjectDef, assets : ProcessedAssets):Entity|Entity[]|void{
+export function spawnBugdomEntity(def : LevelObjectDef, assets : BugdomProcessedAssets):Entity|Entity[]|void{
 	const entityDef = entityDefs[def.type];
 	if (!entityDef) {
 		console.log("unknown entity", def.type);
@@ -332,7 +333,7 @@ export function spawnBugdomEntity(def : LevelObjectDef, assets : ProcessedAssets
 	}
 }
 
-function getMeshGroupFromNumber(num : number, assets : ProcessedAssets){
+function getMeshGroupFromNumber(num : number, assets : BugdomProcessedAssets){
 	assert(num === 0 || (num === 1 && assets.levelType === BugdomLevelType.Lawn), "level mesh group out of range");
 	switch(assets.levelType){
 		case BugdomLevelType.Anthill:

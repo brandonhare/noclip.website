@@ -7,7 +7,7 @@ import { assert } from "../util";
 
 import { parseAppleDouble } from "./AppleDouble";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
-import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, ProcessedAssets, SkeletonNames } from "./nanosaur_entities";
+import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, NanosaurProcessedAssets, SkeletonNames } from "./nanosaur_entities";
 import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
@@ -20,13 +20,13 @@ const pathBase = "nanosaur";
 
 
 
-export type RawAssets = Assets<Qd3DMesh, SkeletalMesh, Qd3DMesh>;
+export type NanosaurRawAssets = Assets<Qd3DMesh, SkeletalMesh, Qd3DMesh|undefined>;
 
 export class NanosaurSceneRenderer extends SceneRenderer {
 
-	processedAssets : ProcessedAssets = {models : {}, skeletons : {}, terrain : undefined};
+	processedAssets : NanosaurProcessedAssets = {models : {}, skeletons : {}, terrain : undefined};
 
-	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings){
+	constructor(device : GfxDevice, context : SceneContext, assets : NanosaurRawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings){
 		super(device, context, sceneSettings);
 
 		this.createModels(device, this.cache, assets);
@@ -45,11 +45,12 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 		}
 	}
 	
-	createModels(device : GfxDevice, cache : Cache, rawAssets : RawAssets){
+	createModels(device : GfxDevice, cache : Cache, rawAssets : NanosaurRawAssets){
 
 		this.processedAssets = {
 			models : {},
 			skeletons : {},
+			terrain : undefined,
 		}
 		
 		if (rawAssets.terrain)
@@ -187,7 +188,7 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			objects = [...objects, ...objArray];
 		}
 
-		const rawAssets : RawAssets = {
+		const rawAssets : NanosaurRawAssets = {
 			models : {},
 			skeletons : {},
 			terrain : terrainModel

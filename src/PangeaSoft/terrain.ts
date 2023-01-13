@@ -5,8 +5,8 @@ export class TerrainInfo {
 	stride : number;
 	xzScale : number;
 	yScale : number;
-	heightmap : Uint8Array;
-	constructor(width : number, height : number, heightmap : Uint8Array, xzScale : number, yScale : number){
+	heightmap : Uint8Array | Float32Array;
+	constructor(width : number, height : number, heightmap : Uint8Array | Float32Array, xzScale : number, yScale : number){
 		this.width = width;
 		this.height = height;
 		this.stride = width + 1;
@@ -54,37 +54,41 @@ export class TerrainInfo {
 
 };
 
-export function convertTilemapFlips(tilemap : Uint16Array){
+export function convertTilemapId(tile : number){
 	const enum FlipFlags {
 		SWIZZLE = 0x1000,
 		FLIP_X  = 0x2000,
 		FLIP_Y  = 0x4000,
 	}
 
+	const tileId = tile & 0xFFF;
+	const flipX = (tile & 0x8000) !== 0;
+	const flipY = (tile & 0x4000) !== 0;
+	const rot = (tile >> 12) & 0x3;
+
+	let result = tileId;
+
+	if (flipX) result |= FlipFlags.FLIP_X;
+	if (flipY) result |= FlipFlags.FLIP_Y;
+	switch(rot){
+		case 1:
+			result ^= FlipFlags.FLIP_Y | FlipFlags.SWIZZLE;
+			break;
+		case 2:
+			result ^= FlipFlags.FLIP_X | FlipFlags.FLIP_Y;
+			break;
+		case 3:
+			result ^= FlipFlags.FLIP_X | FlipFlags.SWIZZLE;
+			break;
+	}
+	return result;
+}
+
+export function convertTilemapFlips(tilemap : Uint16Array){
+
+
 	for (let i = 0; i < tilemap.length; ++i){
-		const tile = tilemap[i];
-		const tileId = tile & 0xFFF;
-		const flipX = (tile & 0x8000) !== 0;
-		const flipY = (tile & 0x4000) !== 0;
-		const rot = (tile >> 12) & 0x3;
-
-		let result = tileId;
-
-		if (flipX) result |= FlipFlags.FLIP_X;
-		if (flipY) result |= FlipFlags.FLIP_Y;
-		switch(rot){
-			case 1:
-				result ^= FlipFlags.FLIP_Y | FlipFlags.SWIZZLE;
-				break;
-			case 2:
-				result ^= FlipFlags.FLIP_X | FlipFlags.FLIP_Y;
-				break;
-			case 3:
-				result ^= FlipFlags.FLIP_X | FlipFlags.SWIZZLE;
-				break;
-		}
-
-		tilemap[i] = result;
+		tilemap[i] = convertTilemapId(tilemap[i]);
 	}
 }
 
@@ -105,22 +109,17 @@ function flipped(heightmap : ArrayLike<number>, stride : number, baseIndex : num
 
 
 
-export function createVerticesFromHeightmap(target : Uint16Array, heightmap : ArrayLike<number>, width : number, height : number) : number{
+export function createVerticesFromHeightmap(target : Uint16Array | Float32Array, heightmap : ArrayLike<number>, mapWidth : number, mapHeight : number, heightScale = 1, xzScale = 1){
 	let i = 0;
-	const stride = width + 1;
-	let maxHeight = 0;
-	for (let row = 0; row <= height; ++row){
-		for (let col = 0; col <= width; ++col){
-			const height = heightmap[row * stride + col];
-			target[i++] = col;
-			target[i++] = height
-			target[i++] = row;
-
-			if (height > maxHeight)
-				maxHeight = height;
+	const stride = mapWidth + 1;
+	for (let row = 0; row <= mapHeight; ++row){
+		for (let col = 0; col <= mapWidth; ++col){
+			const height = heightmap[row * stride + col] * heightScale;
+			target[i++] = col * xzScale;
+			target[i++] = height;
+			target[i++] = row * xzScale;
 		}
 	}
-	return maxHeight;
 }
 
 export function createTilemapIds(target : Uint16Array, tilemap : Uint16Array, width : number, height : number){

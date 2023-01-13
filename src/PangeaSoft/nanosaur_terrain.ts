@@ -66,6 +66,12 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	convertTilemapFlips(textureLayerData);
 
 	const heightmap = createHeightmap(heightmapLayerData, heightmapTiles, TERRAIN_HMTILE_SIZE, terrainWidth, terrainDepth);
+	let minY = Infinity;
+	let maxY = -Infinity;
+	for (const height of heightmap){
+		if (height < minY) minY = height;
+		if (height > maxY) maxY = height;
+	}
 
 	const terrainInfo = new TerrainInfo(terrainWidth, terrainDepth, heightmap, TERRAIN_POLYGON_SIZE, HEIGHT_SCALE);
 
@@ -81,11 +87,11 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	
 	// fill vertex buffers
 	const vertices = new Uint16Array(numVerts * 3); // filled by createVerticesFromHeightmap
-	const maxHeight = createVerticesFromHeightmap(vertices, heightmap, terrainWidth, terrainDepth);
+	createVerticesFromHeightmap(vertices, heightmap, terrainWidth, terrainDepth);
 	const tilemapIds = new Uint16Array(numVerts); // filled by createTilemapIds
 	const maxTextureIndex = createTilemapIds(tilemapIds, textureLayerData, terrainWidth, terrainDepth);
 	const normals = new Float32Array(numVerts * 3); // filled by createNormalsFromHeightmap
-	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, HEIGHT_SCALE);
+	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, HEIGHT_SCALE); // todo check scales
 	
 	// copy duplicated verts over
 	for (let i = 0; i < duplicatedVerts.length; ++i){
@@ -148,7 +154,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	const terrainMesh: Qd3DMesh = {
 		numTriangles : terrainWidth * terrainDepth * 2,
 		numVertices: numVerts,
-		aabb : new AABB(0, 0, 0, terrainWidth * TERRAIN_POLYGON_SIZE, maxHeight * HEIGHT_SCALE, terrainDepth * TERRAIN_POLYGON_SIZE),
+		aabb : new AABB(0, minY * HEIGHT_SCALE, 0, terrainWidth * TERRAIN_POLYGON_SIZE, maxY * HEIGHT_SCALE, terrainDepth * TERRAIN_POLYGON_SIZE),
 		colour: { r: 1, g: 1, b: 1, a: 1 },
 		texture,
 		baseTransform: mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, HEIGHT_SCALE, TERRAIN_POLYGON_SIZE]),

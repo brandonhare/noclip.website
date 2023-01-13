@@ -5,7 +5,7 @@ import { SceneContext } from "../SceneBase";
 import * as Viewer from '../viewer';
 
 import { parseAppleDouble } from "./AppleDouble";
-import { BugdomLevelType, BugdomModelFriendlyNames, ModelSetNames, ProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
+import { BugdomLevelType, BugdomModelFriendlyNames, ModelSetNames, BugdomProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
 import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
 import { parseQd3DMeshGroup, Qd3DMesh } from "./QuickDraw3D";
@@ -16,13 +16,13 @@ const pathBase = "bugdom";
 
 
 
-export type RawAssets = Assets<Qd3DMesh, SkeletalMesh, ParsedBugdomTerrain>;
+export type BugdomRawAssets = Assets<Qd3DMesh, SkeletalMesh, ParsedBugdomTerrain|undefined>;
 
 export class BugdomSceneRenderer extends SceneRenderer {
 
-	processedAssets : ProcessedAssets = {models : {}, skeletons : {}, terrain : undefined, levelType : BugdomLevelType.Lawn };
+	processedAssets : BugdomProcessedAssets = {models : {}, skeletons : {}, terrain : [], levelType : BugdomLevelType.Lawn };
 
-	constructor(device : GfxDevice, context : SceneContext, assets : RawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings, levelType : BugdomLevelType){
+	constructor(device : GfxDevice, context : SceneContext, assets : BugdomRawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings, levelType : BugdomLevelType){
 		super(device, context, sceneSettings);
 
 		this.createModels(device, this.cache, assets);
@@ -31,7 +31,8 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		if (this.processedAssets.terrain)
 			this.entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
 
-		// todo terrain objects
+		for (const terrain of this.processedAssets.terrain){
+		}
 
 		for (const objectDef of objectList){
 			const entity = spawnBugdomEntity(objectDef, this.processedAssets);
@@ -44,12 +45,19 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		}
 	}
 	
-	createModels(device : GfxDevice, cache : Cache, rawAssets : RawAssets){
+	createModels(device : GfxDevice, cache : Cache, rawAssets : BugdomRawAssets){
 
 		this.processedAssets = {
 			models : {},
 			skeletons : {},
+			terrain : [],
 			levelType : BugdomLevelType.Lawn
+		}
+
+		if (rawAssets.terrain){
+			this.processedAssets.terrain = rawAssets.terrain.meshes.map((mesh)=>
+				new StaticObject(device, cache, mesh, "Terrain")
+			);
 		}
 		
 		for (const modelSetName of Object.keys(rawAssets.models)){
@@ -106,11 +114,11 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 		const terrainPromise = scene.terrain
 			? context.dataFetcher.fetchData(`${pathBase}/Terrain/${scene.terrain}.ter.rsrc`)
 				.then((data)=>parseBugdomTerrain(parseAppleDouble(data), this.def.hasCeiling))
-			: {items:[]};
+			: {items:[], meshes:[], splines:[], fences:[]};
 
 		const models = await modelPromises;
 		const skeletons = await skeletonPromises;
-		const terrain = await terrainPromise;
+		const terrain : ParsedBugdomTerrain = await terrainPromise;
 
 		let objects : LevelObjectDef[] = terrain.items;
 
@@ -123,7 +131,7 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 			objects = [...objects, ...objArray];
 		}
 
-		const rawAssets : RawAssets = {
+		const rawAssets : BugdomRawAssets = {
 			models : {},
 			skeletons : {},
 			terrain

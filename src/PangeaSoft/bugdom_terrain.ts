@@ -1,12 +1,51 @@
+import { mat4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
+import { AABB } from "../Geometry";
+import { GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { assert, assertExists } from "../util";
 
 import { ResourceFork } from "./AppleDouble";
 import { LevelObjectDef } from "./entity";
+import { AlphaType, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
+import { convertTilemapId, createIndices, createNormalsFromHeightmap, createTilemapIds, createVerticesFromHeightmap, TerrainInfo } from "./terrain";
+
+
+type SplineDef = {
+	numPoints: number;
+	points: Float32Array;
+	items: SplineItemDef[];
+	top: number;
+	left: number;
+	bottom: number;
+	right: number;
+};
+type FenceDef = {
+	type: number;
+	numNubs: number;
+	nubs: Int32Array;
+	top: number;
+	left: number;
+	bottom: number;
+	right: number;
+};
+type SplineItemDef = {
+	placement: number;
+	type: number;
+	param0: number;
+	param1: number;
+	param2: number;
+	param3: number;
+	flags: number;
+};
+
 
 export type ParsedBugdomTerrain = {
+	meshes : Qd3DMesh[],
 	items : LevelObjectDef[],
+
+	splines : SplineDef[],
+	fences : FenceDef[],
 }
 
 export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boolean): ParsedBugdomTerrain {
@@ -17,7 +56,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		return assertExists(terrainData.get(resourceName)?.get(id), debugName);
 	}
 	function getData(resourceName: string, id: number, debugName: string) {
-		return get(resourceName, id, debugName)?.createDataView();
+		return get(resourceName, id, debugName).createDataView();
 	}
 
 	const TERRAIN_POLYGON_SIZE = 160;
@@ -28,64 +67,136 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	const numItems = header.getUint32(4);
 	const mapWidth = header.getUint32(8);
 	const mapHeight = header.getUint32(12);
-	const numTilePages = header.getUint32(16);
+	//const numTilePages = header.getUint32(16);
 	const numTilesInList = header.getUint32(20);
 	const tileSize = header.getFloat32(24);
-	const heightMinY = header.getFloat32(28);
-	const heightMaxY = header.getFloat32(32);
+	//const heightMinY = header.getFloat32(28);
+	//const heightMaxY = header.getFloat32(32);
 	const numSplines = header.getUint32(36);
 	const numFences = header.getUint32(40);
 
 	// read tile image stuff
-	const tileImageData = get("Timg", 1000, "tile image data").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
+	const textureTileSize = 32;
+	const tileImageData = get("Timg", 1000, "tile image data").createTypedArray(Uint16Array, 0, numTilesInList * textureTileSize * textureTileSize, Endianness.BIG_ENDIAN);
+
+	// create texture
+	const texture : Qd3DTexture = {
+		width : textureTileSize,
+		height : textureTileSize,
+		numTextures : numTilesInList, // updated after meshes are read
+		pixelFormat : GfxFormat.U16_RGBA_5551,
+		alpha : AlphaType.Opaque,
+		wrapU: GfxWrapMode.Mirror,
+		wrapV: GfxWrapMode.Mirror,
+		pixels : tileImageData,
+	};
+
+	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, 0, numTilesInList, Endianness.BIG_ENDIAN);
 
 	const numLayers = hasCeiling ? 2 : 1;
 
 	// read tiles
-	function loadTiles(buffer?: ArrayBufferSlice) {
-		if (!buffer)
-			return;
-		const data = buffer.createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
+	function loadTiles(buffer: ArrayBufferSlice) {
+		const data = buffer.createTypedArray(Uint16Array, 0, mapWidth * mapHeight, Endianness.BIG_ENDIAN);
 		for (let i = 0; i < data.length; ++i) {
-			const tile = data[i];
-			data[i] = (tile & ~0xFFF) | tileImageTranslationTable[tile & 0xFFF];
+			let tile = data[i];
+			tile = (tile & ~0xFFF) | tileImageTranslationTable[tile & 0xFFF];
+			data[i] = convertTilemapId(tile);
 		}
 		return data;
 	}
-	const floor = loadTiles(get("Layr", 1000, "floor layer"))!;
-	const ceiling = hasCeiling ? loadTiles(terrainData.get("Layr")!.get(1001)) : undefined;
 
-	// read heights
 	const yScale = TERRAIN_POLYGON_SIZE / tileSize;
-	const yCoords: Float32Array[] = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i) {
-		const heights = get("YCrd", 1000 + i, "layer").createTypedArray(Float32Array, undefined, undefined, Endianness.BIG_ENDIAN);
-		for (let j = 0; j < heights.length; ++j)
-			heights[j] *= yScale;
-		yCoords[i] = (heights);
+	const numVertsBase = (mapWidth + 1) * (mapHeight + 1);
+
+	
+	// load layer geometry
+	let maxTileIndex = 0;
+	const meshes : Qd3DMesh[] = new Array(numLayers);
+	const infos : TerrainInfo[] = new Array(numLayers);
+	for (let layer = 0; layer < numLayers; ++layer){
+		const tilesSource = loadTiles(get("Layr", 1000 + layer, "tiles"));
+
+		const heightmap =  get("YCrd", 1000 + layer, "heightmap").createTypedArray(Float32Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
+		for (let i = 0; i < heightmap.length; ++i)
+			heightmap[i] *= yScale;
+
+		const terrainInfo = new TerrainInfo(mapWidth, mapHeight, heightmap, TERRAIN_POLYGON_SIZE,1);
+		infos[layer] = terrainInfo;
+
+		let minY = Infinity;
+		let maxY = -Infinity;
+		for (const height of heightmap){
+			if (height < minY) minY = height;
+			if (height > maxY) maxY = height;
+		}
+
+		const replacedTextures = new Map<number, number>();
+		const duplicatedVerts : number[] = [];
+		const indices = createIndices(heightmap, tilesSource, mapWidth, mapHeight, replacedTextures, duplicatedVerts);
+
+		const numVertices = numVertsBase + duplicatedVerts.length;
+		const vertices = new Float32Array(numVertices * 3);
+		createVerticesFromHeightmap(vertices, heightmap, mapWidth, mapHeight, 1, TERRAIN_POLYGON_SIZE);
+
+		const tilemapIds = new Uint16Array(numVertices);
+		const maxLayerTileIndex = createTilemapIds(tilemapIds, tilesSource, mapWidth, mapHeight);
+		if (maxLayerTileIndex > maxTileIndex)
+			maxTileIndex = maxLayerTileIndex;
+
+		const vertexColoursSource = get("Vcol", 1000 + layer, "vertex colours").createTypedArray(Uint16Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
+		const vertexColours = new Uint16Array(numVertices);
+		vertexColours.set(vertexColoursSource);
+
+		const normals = new Float32Array(numVertices * 3);
+		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, yScale); // todo check scales
+		
+		// copy duplicated verts
+		for (let i = 0; i < duplicatedVerts.length; ++i){
+			const srcIndex = duplicatedVerts[i];
+			const destIndex = numVertsBase + i;
+			const srcIndex3 = srcIndex * 3;
+			const destIndex3 = destIndex * 3;
+			
+			tilemapIds[destIndex] = tilemapIds[srcIndex];
+			vertexColours[destIndex] = vertexColours[srcIndex];
+			for (let j = 0; j < 3; ++j){
+				vertices[destIndex3 + j] = vertices[srcIndex3 + j];
+				normals[destIndex3 + j] = normals[srcIndex3 + j];
+			}
+		}
+
+		const aabb = new AABB(0, minY, 0, mapWidth * TERRAIN_POLYGON_SIZE, maxY, mapHeight * TERRAIN_POLYGON_SIZE);
+
+		const mesh : Qd3DMesh = {
+			numTriangles : mapWidth * mapHeight * 6,
+			numVertices,
+			aabb,
+			colour : { r : 1, g : 1, b : 1, a : 1 },
+			texture,
+		
+			indices,
+			vertices,
+			normals,
+			vertexColours,
+			tilemapIds,
+		};
+
+		meshes[layer] = mesh;
 	}
 
-	// read vertex colours
-	const vertexColours: Uint16Array[] = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i) {
-		vertexColours[i] = get("Vcol", 1000 + i, "vertex colours").createTypedArray(Uint16Array, undefined, undefined, Endianness.BIG_ENDIAN);
-	}
+	texture.numTextures = maxTileIndex + 1;
 
-	// read splits
-	const splits : Uint8Array[] = new Array(numLayers);
-	for (let i = 0; i < numLayers; ++i) {
-		splits[i] = get("Splt", 1000 + i, "split data").createTypedArray(Uint8Array);
-	}
 
 	// read items
 	const itemData = getData("Itms", 1000, "items");
 	const items: LevelObjectDef[] = new Array(numItems);
 	for (let i = 0; i < numItems; ++i) {
+		const x = itemData.getUint16(i * 12 + 0) * MAP2UNIT_VALUE;
+		const z = itemData.getUint16(i * 12 + 2) * MAP2UNIT_VALUE;
+		const y = infos[0].getHeight(x, z);
 		items[i] = {
-			x: itemData.getUint16(i * 12 + 0) * MAP2UNIT_VALUE,
-			y: 0,
-			z: itemData.getUint16(i * 12 + 2) * MAP2UNIT_VALUE,
+			x,y,z,
 			type: itemData.getUint16(i * 12 + 4),
 			param0: itemData.getUint8(i * 12 + 6),
 			param1: itemData.getUint8(i * 12 + 7),
@@ -95,25 +206,6 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		};
 	}
 
-	type SplineDef = {
-		numPoints: number;
-		points: Float32Array;
-		items: SplineItemDef[];
-		top: number;
-		left: number;
-		bottom: number;
-		right: number;
-	};
-
-	type SplineItemDef = {
-		placement: number;
-		type: number;
-		param0: number;
-		param1: number;
-		param2: number;
-		param3: number;
-		flags: number;
-	};
 
 	// read splines
 	const splines: SplineDef[] = new Array(numSplines);
@@ -159,15 +251,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	}
 
 	// read fences
-	type FenceDef = {
-		type: number;
-		numNubs: number;
-		nubs: Int32Array;
-		top: number;
-		left: number;
-		bottom: number;
-		right: number;
-	};
+
 	const fences: FenceDef[] = new Array(numFences);
 	if (numFences > 0) {
 		const fenceData = getData("Fenc", 1000, "fences");
@@ -196,15 +280,9 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 
 
 	return {
-		mapWidth,
-		mapHeight,
-		tileImageData,
-		floor,
-		ceiling,
-		vertexColours,
-		splits,
+		meshes,
 		items,
 		splines,
 		fences,
-	} as ParsedBugdomTerrain;
+	};
 }

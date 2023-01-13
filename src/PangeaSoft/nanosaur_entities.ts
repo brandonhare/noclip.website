@@ -5,7 +5,7 @@ import { assert } from "../util";
 import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef, ShadowEntity } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
-export type ProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject>;
+export type NanosaurProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject | undefined >;
 
 export const enum ObjectType {
 	Player,
@@ -96,11 +96,11 @@ class UndulateEntity extends Entity {
 }
 
 
-function spawnTriceratops(def : LevelObjectDef, assets : ProcessedAssets){ // 2
+function spawnTriceratops(def : LevelObjectDef, assets : NanosaurProcessedAssets){ // 2
 	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, 1, false);
 	return [result, new ShadowEntity(assets.models.Global_Models[1], result, 2.7, 2.7*1.5)];
 };
-export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedAssets)=>Entity|Entity[]|void)[] = [
+export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
 		const mainMenu = def.param0; // main menu hack
 		const player = new AnimatedEntity(assets.skeletons.Deinon!, [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, mainMenu, !mainMenu);
@@ -523,6 +523,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : ProcessedA
 		return new Entity(assets.models.HighScores[def.param0], [def.x, def.y, def.z], 0, 1, false);
 	},
 ];
-export function invalidEntityType(def : LevelObjectDef, assets : ProcessedAssets) {
+export function invalidEntityType(def : LevelObjectDef, assets : NanosaurProcessedAssets) {
 	console.log("invalid object type", def);
 }

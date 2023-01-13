@@ -20,7 +20,7 @@ export type Qd3DMesh = {
 	vertices : Float32Array | Uint16Array;
 	UVs?: Float32Array; // uv
 	normals?: Float32Array; // xyz
-	vertexColours?: Float32Array; // rgb
+	vertexColours?: Float32Array | Uint16Array; // rgb | rgba_5551
 	tilemapIds? : Uint16Array;
 	boneIds? : Uint8Array,
 };
