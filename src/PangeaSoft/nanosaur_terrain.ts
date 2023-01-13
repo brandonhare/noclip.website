@@ -91,7 +91,7 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 	const tilemapIds = new Uint16Array(numVerts); // filled by createTilemapIds
 	const maxTextureIndex = createTilemapIds(tilemapIds, textureLayerData, terrainWidth, terrainDepth);
 	const normals = new Float32Array(numVerts * 3); // filled by createNormalsFromHeightmap
-	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, HEIGHT_SCALE); // todo check scales
+	createNormalsFromHeightmap(normals, heightmap, terrainWidth, terrainDepth, TERRAIN_POLYGON_SIZE, HEIGHT_SCALE); // todo check scales
 	
 	// copy duplicated verts over
 	for (let i = 0; i < duplicatedVerts.length; ++i){

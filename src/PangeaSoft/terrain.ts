@@ -109,15 +109,14 @@ function flipped(heightmap : ArrayLike<number>, stride : number, baseIndex : num
 
 
 
-export function createVerticesFromHeightmap(target : Uint16Array | Float32Array, heightmap : ArrayLike<number>, mapWidth : number, mapHeight : number, heightScale = 1, xzScale = 1){
+export function createVerticesFromHeightmap(target : Uint16Array | Float32Array, heightmap : ArrayLike<number>, mapWidth : number, mapHeight : number){
 	let i = 0;
 	const stride = mapWidth + 1;
 	for (let row = 0; row <= mapHeight; ++row){
 		for (let col = 0; col <= mapWidth; ++col){
-			const height = heightmap[row * stride + col] * heightScale;
-			target[i++] = col * xzScale;
-			target[i++] = height;
-			target[i++] = row * xzScale;
+			target[i++] = col;
+			target[i++] = heightmap[row * stride + col];
+			target[i++] = row;
 		}
 	}
 }
@@ -135,7 +134,7 @@ export function createTilemapIds(target : Uint16Array, tilemap : Uint16Array, wi
 	return max;
 }
 
-export function createNormalsFromHeightmap(target : Float32Array, heightmap : ArrayLike<number>, width : number, height : number, heightScale : number){
+export function createNormalsFromHeightmap(target : Float32Array, heightmap : ArrayLike<number>, width : number, height : number, xzScale : number, heightScale : number){
 	const stride = width + 1;
 	heightScale *= 0.1;
 	for (let row = 0; row <= height; ++row){
@@ -156,6 +155,8 @@ export function createNormalsFromHeightmap(target : Float32Array, heightmap : Ar
 			target[baseIndex*3  ] = x * magnitude;
 			target[baseIndex*3+1] = 1 * magnitude;
 			target[baseIndex*3+2] = z * magnitude;
+
+			// todo check scales
 		}
 	}
 }

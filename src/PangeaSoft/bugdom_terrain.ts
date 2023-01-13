@@ -7,7 +7,7 @@ import { assert, assertExists } from "../util";
 
 import { ResourceFork } from "./AppleDouble";
 import { LevelObjectDef } from "./entity";
-import { AlphaType, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
+import { AlphaType, Qd3DMesh, Qd3DTexture, swizzle1555Pixels } from "./QuickDraw3D";
 import { convertTilemapId, createIndices, createNormalsFromHeightmap, createTilemapIds, createVerticesFromHeightmap, expandVertexColours, TerrainInfo } from "./terrain";
 
 
@@ -79,6 +79,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	const textureTileSize = 32;
 	const tileImageData = get("Timg", 1000, "tile image data").createTypedArray(Uint16Array, 0, numTilesInList * textureTileSize * textureTileSize, Endianness.BIG_ENDIAN);
 
+	swizzle1555Pixels(tileImageData, false);
 	// create texture
 	const texture : Qd3DTexture = {
 		width : textureTileSize,
@@ -92,7 +93,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 	};
 
 	const tileImageTranslationTable = get("Xlat", 1000, "tile->image translation table").createTypedArray(Uint16Array, 0, numTilesInList, Endianness.BIG_ENDIAN);
-
+	
 	const numLayers = hasCeiling ? 2 : 1;
 
 	// read tiles
@@ -118,11 +119,6 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		const tilesSource = loadTiles(get("Layr", 1000 + layer, "tiles"));
 
 		const heightmap =  get("YCrd", 1000 + layer, "heightmap").createTypedArray(Float32Array, 0, numVertsBase, Endianness.BIG_ENDIAN);
-		for (let i = 0; i < heightmap.length; ++i)
-			heightmap[i] *= yScale;
-
-		const terrainInfo = new TerrainInfo(mapWidth, mapHeight, heightmap, TERRAIN_POLYGON_SIZE,1);
-		infos[layer] = terrainInfo;
 
 		let minY = Infinity;
 		let maxY = -Infinity;
@@ -131,13 +127,17 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			if (height > maxY) maxY = height;
 		}
 
+		const terrainInfo = new TerrainInfo(mapWidth, mapHeight, heightmap, TERRAIN_POLYGON_SIZE, yScale);
+		infos[layer] = terrainInfo;
+
+
 		const replacedTextures = new Map<number, number>();
 		const duplicatedVerts : number[] = [];
 		const indices = createIndices(heightmap, tilesSource, mapWidth, mapHeight, replacedTextures, duplicatedVerts);
 
 		const numVertices = numVertsBase + duplicatedVerts.length;
 		const vertices = new Float32Array(numVertices * 3);
-		createVerticesFromHeightmap(vertices, heightmap, mapWidth, mapHeight, 1, TERRAIN_POLYGON_SIZE);
+		createVerticesFromHeightmap(vertices, heightmap, mapWidth, mapHeight);
 
 		const tilemapIds = new Uint16Array(numVertices);
 		const maxLayerTileIndex = createTilemapIds(tilemapIds, tilesSource, mapWidth, mapHeight);
@@ -149,7 +149,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		expandVertexColours(vertexColours, vertexColoursSource);
 
 		const normals = new Float32Array(numVertices * 3);
-		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, yScale); // todo check scales
+		createNormalsFromHeightmap(normals, heightmap, mapWidth, mapHeight, TERRAIN_POLYGON_SIZE, yScale);
 		
 		// copy duplicated verts
 		for (let i = 0; i < duplicatedVerts.length; ++i){
@@ -162,11 +162,13 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			for (let j = 0; j < 3; ++j){
 				vertices[destIndex3 + j] = vertices[srcIndex3 + j];
 				normals[destIndex3 + j] = normals[srcIndex3 + j];
-				vertexColours[destIndex3 + j] = vertexColours[srcIndex + j];
+				vertexColours[destIndex3 + j] = vertexColours[srcIndex3 + j];
 			}
 		}
 
-		const aabb = new AABB(0, minY, 0, mapWidth * TERRAIN_POLYGON_SIZE, maxY, mapHeight * TERRAIN_POLYGON_SIZE);
+		const aabb = new AABB(0, minY * yScale, 0, mapWidth * TERRAIN_POLYGON_SIZE, maxY * yScale, mapHeight * TERRAIN_POLYGON_SIZE);
+
+		const baseTransform = mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, yScale, TERRAIN_POLYGON_SIZE]);
 
 		const mesh : Qd3DMesh = {
 			numTriangles : mapWidth * mapHeight * 2,
@@ -174,6 +176,7 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			aabb,
 			colour : { r : 1, g : 1, b : 1, a : 1 },
 			texture,
+			baseTransform,
 		
 			indices,
 			vertices,
