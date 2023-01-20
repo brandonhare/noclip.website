@@ -463,7 +463,7 @@ export class StaticObject implements Destroyable {
 		
 		if (translucent){
 			const megaState = renderInst.setMegaStateFlags({
-				depthWrite: true,
+				depthWrite: false,
 			});
 			setAttachmentStateSimple(megaState, {
 				blendMode: GfxBlendMode.Add,
