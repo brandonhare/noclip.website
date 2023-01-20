@@ -26,8 +26,8 @@ export class TerrainInfo {
 		
 		let h1 = this.heightmap[baseIndex];
 		let h2 = this.heightmap[baseIndex + 1];
-		let h3 = this.heightmap[baseIndex + this.stride];
-		let h4 = this.heightmap[baseIndex + this.stride + 1];
+		let h3 = this.heightmap[baseIndex + this.stride + 1];
+		let h4 = this.heightmap[baseIndex + this.stride];
 
 		if (!needsFlip(h1, h2, h3, h4)){
 			x = 1 - x;

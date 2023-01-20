@@ -1,9 +1,11 @@
-import { vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { MathConstants } from "../MathHelpers";
-import { assert } from "../util";
+import { assert, assertExists } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef, ShadowEntity } from "./entity";
+import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
+import { TerrainInfo } from "./terrain";
+
 
 export type NanosaurProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject | undefined >;
 
@@ -95,10 +97,71 @@ class UndulateEntity extends Entity {
 	}
 }
 
+class ShadowEntity extends Entity {
+	constructor(terrainInfo : TerrainInfo | undefined, mesh : StaticObject | StaticObject[], parent : Entity, terrainY : number, scaleX : number, scaleZ : number){
+		assert(terrainInfo !== undefined, "spawned a shadow with no terrain info!");
+
+		super(mesh, vec3.clone(parent.position), parent.rotation, 1, false);
+
+		this.scale[0] = scaleX;
+		this.scale[2] = scaleZ;
+		this.position[1] = terrainY + 3;
+		this.updateShadow(terrainInfo, parent.position[1]);
+	}
+
+	updateShadow(terrainInfo : TerrainInfo, parentY : number){
+
+		const [x,y,z] = this.position;
+	
+		const dist = 1 - Math.min(0.5, (parentY - y) / 400);
+		const sideScale = this.scale[0] * dist;
+		const forwardScale = this.scale[2] * dist;
+
+		const sideOffset = sideScale * 25;
+		//const forwardOffset = forwardScale * 25;
+		const forwardOffset = sideOffset; // the original game uses the width for both directions
+
+
+		function getAxisDy(dx : number, dz : number){
+			const h1 = terrainInfo.getHeight(x + dx, z + dz);
+			const h2 = terrainInfo.getHeight(x - dx, z - dz);
+			return (h1 - h2) * 0.5;
+		}
+
+		const cosRot = Math.cos(this.rotation);
+		const sinRot = Math.sin(this.rotation);
+
+		const sideDx = -cosRot * sideOffset;
+		const sideDz =  sinRot * sideOffset;
+		const sideDy = getAxisDy(sideDx, sideDz);
+
+		const forwardDx = -sinRot * forwardOffset;
+		const forwardDz = -cosRot * forwardOffset;
+		const forwardDy = getAxisDy(forwardDx, forwardDz);
+
+		// cross product of above
+		const upDx = sideDy * forwardOffset * cosRot + forwardDy * sideOffset * sinRot;
+		const upDy = forwardOffset * sideOffset;
+		const upDz = forwardDy * sideOffset * cosRot - sideDy * forwardOffset * sinRot;
+		
+		// normalize and apply scale values
+		const xScale = sideScale / Math.hypot(sideOffset, sideDy);
+		const yScale = this.scale[1] / Math.hypot(upDx, upDy, upDz);
+		const zScale = forwardScale / Math.hypot(forwardOffset, forwardDy); 
+
+		// todo: check if we're applying scale correctly
+		mat4.set(this.modelMatrix,
+			sideDx * xScale, sideDy * xScale, sideDz * xScale, 0,
+			upDx * yScale, upDy * yScale, upDz * yScale, 0,
+			forwardDx * zScale, forwardDy * zScale, forwardDz * zScale, 0,
+			x, y, z, 1);
+	}
+}
+
 
 function spawnTriceratops(def : LevelObjectDef, assets : NanosaurProcessedAssets){ // 2
 	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, 1, false);
-	return [result, new ShadowEntity(assets.models.Global_Models[1], result, 2.7, 2.7*1.5)];
+	return [result, new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], result, def.y, 2.7, 2.7*1.5)];
 };
 export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurProcessedAssets)=>Entity|Entity[]|void)[] = [
 	function spawnPlayer(def, assets){ // 0
@@ -108,7 +171,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			player.animationController.t = 0;
 			return player;
 		} else {
-			return [player, new ShadowEntity(assets.models.Global_Models[1], player, 0.9, 0.9*2.5)];
+			return [player, new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], player, def.y, 0.9, 0.9*2.5)];
 		}
 	},
 	function spawnPowerup(def, assets){ // 1
@@ -129,7 +192,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			rex.animationController.animSpeed = 0.8;
 			return rex;
 		} else {
-			return [rex, new ShadowEntity(assets.models.Global_Models[1], rex, 2.6, 2.6*2.5)];
+			return [rex, new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], rex, def.y, 2.6, 2.6*2.5)];
 		}
 	},
 	function spawnLava(def, assets){ // 4
@@ -256,6 +319,8 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			rock? : Entity = undefined;
 			startY = this.position[1];
 			t = Math.random() * MathConstants.TAU;
+			shadow : ShadowEntity;
+			terrainInfo : TerrainInfo;
 		
 			override update(dt : number) {
 		
@@ -263,6 +328,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				const y = this.startY + (this.rock ? 300 : 200) + Math.cos(this.t) * 150;
 				this.position[1] = y;
 				this.updateMatrix();
+				this.shadow.updateShadow(this.terrainInfo, y);
 		
 				super.update(dt);
 		
@@ -278,9 +344,12 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 
 		const hasRock = (def.param3 & (1<<1)) !== 0;
 		const ptera = new PteranodonEntity(assets.skeletons.Ptera!, [def.x, def.y, def.z], null, 1, hasRock ? 2 : 0, false);
+		ptera.terrainInfo = assertExists(assets.terrainInfo, "terrainInfo missing!");
 		ptera.startY = def.y;
 		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
-		const results : Entity[] = [ptera, new ShadowEntity(assets.models.Global_Models[1], ptera, 4, 4.5)];
+		const shadow = new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], ptera, def.y, 4, 4.5);
+		ptera.shadow = shadow;
+		const results : Entity[] = [ptera, shadow];
 		if (hasRock) {
 			const rock = new Entity(assets.models.Level1_Models[9], [def.x, def.y, def.z], 0, 0.4, false);
 			ptera.rock = rock;
@@ -290,7 +359,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	},
 	function spawnStegosaurus(def, assets){ // 8
 		const stego = new AnimatedEntity(assets.skeletons.Stego!, [def.x, def.y, def.z], null, 1.4, 1, true);
-		return [stego, new ShadowEntity(assets.models.Global_Models[1], stego, 5, 5*2)];
+		return [stego, new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], stego, def.y, 5, 5*2)];
 	},
 	function spawnTimePortal(def, assets){ // 9
 
@@ -382,7 +451,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	},
 	function spawnSpitter(def, assets){ // 16
 		const spitter = new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, 0, false);
-		return [spitter, new ShadowEntity(assets.models.Global_Models[1], spitter, 1.6, 1.6*2.5)];
+		return [spitter, new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], spitter, def.y, 1.6, 1.6*2.5)];
 	},
 	function spawnStepStone(def, assets){ // 17
 		// todo: quick y

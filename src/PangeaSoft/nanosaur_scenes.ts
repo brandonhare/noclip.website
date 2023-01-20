@@ -24,7 +24,7 @@ export type NanosaurRawAssets = Assets<Qd3DMesh, SkeletalMesh, Qd3DMesh|undefine
 
 export class NanosaurSceneRenderer extends SceneRenderer {
 
-	processedAssets : NanosaurProcessedAssets = {models : {}, skeletons : {}, terrain : undefined};
+	processedAssets : NanosaurProcessedAssets = {models : {}, skeletons : {}, terrain : undefined, terrainInfo : undefined};
 
 	constructor(device : GfxDevice, context : SceneContext, assets : NanosaurRawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings){
 		super(device, context, sceneSettings);
@@ -50,11 +50,9 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 		this.processedAssets = {
 			models : {},
 			skeletons : {},
-			terrain : undefined,
+			terrain : rawAssets.terrain ? new StaticObject(device, cache, rawAssets.terrain, "Terrain") : undefined,
+			terrainInfo : rawAssets.terrainInfo,
 		}
-		
-		if (rawAssets.terrain)
-			this.processedAssets.terrain = new StaticObject(device, cache, rawAssets.terrain, "Terrain");
 
 		for (const modelSetName of Object.keys(rawAssets.models)){
 			const modelSet = rawAssets.models[modelSetName];
@@ -70,7 +68,7 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton, NanosaurModelFriendlyNames, skeletonName);
 		}
 
-		// fixup shadow model
+		// fixup shadow texture
 		const globalModels = this.processedAssets.models.Global_Models;
 		if (globalModels){
 			const shadowModel = globalModels[1][0];
@@ -191,7 +189,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 		const rawAssets : NanosaurRawAssets = {
 			models : {},
 			skeletons : {},
-			terrain : terrainModel
+			terrain : terrainModel,
+			terrainInfo,
 		};
 		for (let i = 0; i < (this.def.models?.length ?? 0); ++i){
 			const name = this.def.models![i];

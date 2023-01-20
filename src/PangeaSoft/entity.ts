@@ -1,15 +1,17 @@
 import * as Viewer from '../viewer';
-import { mat4, quat, vec2, vec3 } from "gl-matrix";
+
+import { mat4, vec2, vec3 } from "gl-matrix";
 import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 import { AABB, Frustum } from "../Geometry";
 import { fillMatrix4x3 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxColor, GfxDevice } from "../gfx/platform/GfxPlatform";
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
-import { MathConstants, quatFromEulerRadians } from "../MathHelpers";
+import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
 import { AnimatedObject, Cache, Program, RenderFlags, StaticObject } from "./renderer";
 import { AnimationController } from "./skeleton";
+import { TerrainInfo } from "./terrain";
 
 
 export type Assets<MeshType, SkeletonType, TerrainType> = {
@@ -20,6 +22,7 @@ export type Assets<MeshType, SkeletonType, TerrainType> = {
 		[name : string] : SkeletonType
 	}
 	terrain : TerrainType
+	terrainInfo? : TerrainInfo
 };
 
 export type FriendlyNames = {[set:string]:(string | string[])[]};
@@ -67,7 +70,6 @@ export class Entity {
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	extraRenderFlags : RenderFlags = 0;
 	alwaysUpdate = false;
-	shadow? : ShadowEntity = undefined;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
@@ -115,17 +117,16 @@ export class Entity {
 	}
 
 	updateMatrix(){
-		const rot : quat = [0,0,0,0];
-		quatFromEulerRadians(rot, this.rotX, this.rotation, this.rotZ);
-		mat4.fromRotationTranslationScale(this.modelMatrix, rot, this.position, this.scale);
+		computeModelMatrixSRT(this.modelMatrix,
+			this.scale[0], this.scale[1], this.scale[2],
+			this.rotX, this.rotation, this.rotZ,
+			this.position[0], this.position[1], this.position[2]);
 
 		this.aabb.reset();
 		for (const mesh of this.meshes){
 			this.aabb.union(this.aabb, mesh.aabb);
 		}
 		this.aabb.transform(this.aabb, this.modelMatrix);
-
-		this.shadow?.updateShadow(this);
 	}
 
 	checkVisible(frustum : Frustum){
@@ -208,24 +209,5 @@ export class AnimatedEntity extends Entity{
 			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 
 		renderInstManager.popTemplateRenderInst();
-	}
-}
-
-export class ShadowEntity extends Entity {
-	baseScaleX = 1;
-	baseScaleZ = 1;
-	constructor(mesh : StaticObject | StaticObject[], parent : Entity, scaleX = parent.scale[0], scaleZ = parent.scale[2]){
-		super(mesh, vec3.clone(parent.position), parent.rotation, 1, false);
-		this.baseScaleX = scaleX;
-		this.baseScaleZ = scaleZ;
-		this.scale[0] = scaleX;
-		this.scale[2] = scaleZ;
-		this.position[1] += 0.5;
-		parent.shadow = this;
-		this.updateShadow(parent);
-	}
-	updateShadow(parent : Entity){
-		// todo: project onto terrain
-		this.updateMatrix();
 	}
 }
