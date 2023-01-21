@@ -73,7 +73,8 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 		if (globalModels){
 			const shadowModel = globalModels[1][0];
 			shadowModel.renderFlags |= RenderFlags.Translucent;
-			shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0;
+			shadowModel.renderLayerOffset = -2; // draw shadows below water
+			shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0; // sprite texture is white, make it black
 		}
 		
 		if (cache.onnewtextures)

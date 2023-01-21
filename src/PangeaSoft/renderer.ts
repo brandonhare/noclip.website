@@ -327,6 +327,7 @@ export class StaticObject implements Destroyable {
 	scrollUVs : vec2 = [0,0];
 	renderFlags : RenderFlags = 0;
 	textureMapping : TextureMapping[] = [];
+	renderLayerOffset = 0;
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
 		this.indexCount = mesh.numTriangles * 3;
@@ -496,8 +497,12 @@ export class StaticObject implements Destroyable {
 			uniformData[uniformOffset++] = this.scrollUVs[1];
 		}
 
+		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
+		if (translucent)
+			renderLayer |= GfxRendererLayer.TRANSLUCENT;
+
 		renderInst.sortKey = setSortKeyDepth(
-			makeSortKey(translucent ? GfxRendererLayer.TRANSLUCENT : GfxRendererLayer.OPAQUE, gfxProgram.ResourceUniqueId),
+			makeSortKey(renderLayer, gfxProgram.ResourceUniqueId),
 			computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entity.position)
 		);
 

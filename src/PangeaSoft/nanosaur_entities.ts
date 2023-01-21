@@ -149,12 +149,13 @@ class ShadowEntity extends Entity {
 		const yScale = this.scale[1] / Math.hypot(upDx, upDy, upDz);
 		const zScale = forwardScale / Math.hypot(forwardOffset, forwardDy); 
 
-		// todo: check if we're applying scale correctly
 		mat4.set(this.modelMatrix,
 			sideDx * xScale, sideDy * xScale, sideDz * xScale, 0,
 			upDx * yScale, upDy * yScale, upDz * yScale, 0,
 			forwardDx * zScale, forwardDy * zScale, forwardDz * zScale, 0,
 			x, y, z, 1);
+
+		this.aabb.transform(this.meshes[0].aabb, this.modelMatrix);
 	}
 }
 
