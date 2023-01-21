@@ -607,7 +607,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
         const renderInstManager = this.renderHelper.renderInstManager;
 
-		const dt = viewerInput.deltaTime * 0.001;
+		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
 		for (let i = 0; i < this.entities.length; ++i){
 			const entity = this.entities[i];
 			const visible = entity.checkVisible(viewerInput.camera.frustum);
