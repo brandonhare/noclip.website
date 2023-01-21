@@ -430,10 +430,11 @@ export class StaticObject implements Destroyable {
 		};
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
+
 	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity, flipBackfaces = false): void {
         const renderInst = renderInstManager.newRenderInst();
 
-		const renderFlags = this.renderFlags | entity.extraRenderFlags;
+		const renderFlags = this.renderFlags;
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
 		const gfxProgram = cache.getProgram(renderFlags);
@@ -511,10 +512,29 @@ export class StaticObject implements Destroyable {
 		if (drawBackfacesSeparately && !flipBackfaces)
 			this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
 	}
+
 	destroy(device: GfxDevice): void {
 		device.destroyInputState(this.inputState);
 		for (const buf of this.buffers)
 			device.destroyBuffer(buf);
+	}
+
+	
+	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
+		this.colour.a = alpha;
+		this.renderFlags |= RenderFlags.Translucent;
+		if (unlit)
+			this.renderFlags |= RenderFlags.Unlit;
+		if (keepBackfaces)
+			this.renderFlags |= RenderFlags.KeepBackfaces;
+	}
+	makeReflective() {
+		this.renderFlags |= RenderFlags.Reflective;
+	}
+
+	makeScrollUVs(xy : vec2){
+		this.scrollUVs = xy;
+		this.renderFlags |= RenderFlags.ScrollUVs;
 	}
 }
 

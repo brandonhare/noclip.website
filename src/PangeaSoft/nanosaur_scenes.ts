@@ -7,7 +7,7 @@ import { assert } from "../util";
 
 import { parseAppleDouble } from "./AppleDouble";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
-import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, NanosaurProcessedAssets, SkeletonNames } from "./nanosaur_entities";
+import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, NanosaurProcessedAssets, SkeletonNames, initNanosaurMeshRenderSettings } from "./nanosaur_entities";
 import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
@@ -68,14 +68,7 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton, NanosaurModelFriendlyNames, skeletonName);
 		}
 
-		// fixup shadow texture
-		const globalModels = this.processedAssets.models.Global_Models;
-		if (globalModels){
-			const shadowModel = globalModels[1][0];
-			shadowModel.renderFlags |= RenderFlags.Translucent;
-			shadowModel.renderLayerOffset = -2; // draw shadows below water
-			shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0; // sprite texture is white, make it black
-		}
+		initNanosaurMeshRenderSettings(this.processedAssets);
 		
 		if (cache.onnewtextures)
 			cache.onnewtextures();

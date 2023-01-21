@@ -68,7 +68,6 @@ export class Entity {
 	modelMatrix : mat4 = mat4.create();
 	aabb : AABB = new AABB();
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
-	extraRenderFlags : RenderFlags = 0;
 	alwaysUpdate = false;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
@@ -95,25 +94,6 @@ export class Entity {
 		this.scale = [scale, scale, scale];
 
 		this.updateMatrix();
-	}
-
-	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
-		this.colour.a = alpha;
-		this.extraRenderFlags |= RenderFlags.Translucent;
-		if (unlit)
-			this.extraRenderFlags |= RenderFlags.Unlit;
-		if (keepBackfaces)
-			this.extraRenderFlags |= RenderFlags.KeepBackfaces;
-	}
-	makeReflective() {
-		this.extraRenderFlags |= RenderFlags.Reflective;
-	}
-
-	scrollUVs(xy : vec2){
-		for (const mesh of this.meshes){
-			mesh.scrollUVs = xy;
-			mesh.renderFlags |= RenderFlags.ScrollUVs;
-		}
 	}
 
 	updateMatrix(){

@@ -76,6 +76,55 @@ NanosaurModelFriendlyNames.HighScores.push("Cursor");
 NanosaurModelFriendlyNames.HighScores.push(["Spiral", "SpiralBackground"]);
 
 
+export function initNanosaurMeshRenderSettings(assets : NanosaurProcessedAssets){
+
+	const globalModels = assets.models.Global_Models;
+	if (globalModels){
+		// shadow
+		const shadowModel = globalModels[1][0];
+		shadowModel.renderFlags |= RenderFlags.Translucent;
+		shadowModel.renderLayerOffset = -2; // draw shadows below water
+		shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0; // sprite texture is white, make it black
+		// smoke puff
+		globalModels[3][0].makeTranslucent(0.5, false, true);
+		// time portal ring
+		globalModels[10][0].makeTranslucent(1, false, true);
+	}
+
+	const level1Models = assets.models.Level1_Models;
+	if (level1Models){
+		// lava
+		level1Models[1][0].makeScrollUVs([0.07, 0.03]);
+		// water
+		const waterModel = level1Models[2][0];
+		waterModel.makeTranslucent(0.8, false, true);
+		waterModel.makeScrollUVs([-0.04, 0.08])
+		// gas vent
+		level1Models[22][0].makeTranslucent(0.7, true, true);	
+		// crystals
+		for (let i = 12; i <= 14; ++i){
+			const crystalModel = level1Models[i][0];
+			crystalModel.makeTranslucent(0.7, false, true);
+			crystalModel.renderFlags |= RenderFlags.DrawBackfacesSeparately;
+		}
+	}
+
+	const menuModels = assets.models.MenuInterface;
+	if (menuModels){
+		// background center thingy
+		menuModels[5][0].makeReflective();
+	}
+
+	const titleModels = assets.models.Title;
+	if (titleModels){
+		// game name
+		titleModels[0][0].makeReflective();
+		// logo
+		titleModels[1][0].makeReflective();
+	}
+}
+
+
 class SpinningEntity extends Entity {
 	spinSpeed = 1;
 
@@ -245,9 +294,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				this.puffTimer += dt;
 				if (this.puffTimer > 0.06){
 					this.puffTimer %= 0.06;
-					const puff = new SmokePuffEntity(smokeMesh, [...this.position] as vec3, null, Math.random() * 0.1 + 0.4, false);
-					puff.makeTranslucent(0.5, false, true); // todo backfaces?
-					return puff;
+					return new SmokePuffEntity(smokeMesh, [...this.position] as vec3, null, Math.random() * 0.1 + 0.4, false);
 				}
 			}
 		}
@@ -283,7 +330,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			result = new LavaEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
 		else
 			result = new UndulateEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
-		result.scrollUVs([0.07, 0.03]);
 		result.baseScale = 0.501;
 		result.amplitude = 0.5;
 		result.period = 2.0;
@@ -310,9 +356,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			}
 		};
 
-		const result = new GasVentEntity(assets.models.Level1_Models[22], [def.x, def.y, def.z], 0, 0.5, false);
-		result.makeTranslucent(0.7, true, true);
-		return result;
+		return new GasVentEntity(assets.models.Level1_Models[22], [def.x, def.y, def.z], 0, 0.5, false);
 	},
 	function spawnPteranodon(def, assets){ // 7
 
@@ -392,7 +436,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			const ring = new TimePortalRingEntity(assets.models.Global_Models[10], [def.x, def.y + 15, def.z], 0, 5, false);
 			ring.startY = ring.position[1];
 			ring.t = i * 0.3;
-			ring.makeTranslucent(1, false, true);
 			results.push(ring);
 		}
 		return results;
@@ -432,8 +475,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		const y = (def.param3 & 1) ? def.y + 50 : 210;
 
 		const result = new UndulateEntity(assets.models.Level1_Models[2], [x,y,z], 0, 2, false);
-		result.makeTranslucent(0.8, false, true);
-		result.scrollUVs([-0.04, 0.08]);
 		//result.t = 1;
 		result.period = 3;
 		result.amplitude = 0.5;
@@ -445,10 +486,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		const type = def.param0;
 		assert(type >= 0 && type <= 2, "crystal type out of range");
 		// todo: y coord quick
-		const result = new Entity(assets.models.Level1_Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
-		result.makeTranslucent(0.7, false, true);
-		result.extraRenderFlags |= RenderFlags.DrawBackfacesSeparately;
-		return result;
+		return new Entity(assets.models.Level1_Models[crystalMeshIndices[type]], [def.x, def.y, def.z], 0, 1.5 + Math.random(), false);
 	},
 	function spawnSpitter(def, assets){ // 16
 		const spitter = new AnimatedEntity(assets.skeletons.Diloph!, [def.x, def.y, def.z], null, 0.8, 0, false);
@@ -517,7 +555,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 
 		const result = new EggSpawnerEntity(assets.models.MenuInterface[5], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
 		result.scale[1] *= 0.5;
-		result.makeReflective();
 		return result;
 	},
 	function spawnOptionsIcon(def, assets){ // 21
@@ -548,9 +585,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				this.updateMatrix();
 			}
 		}
-		const result = new LogoEntity(assets.models.Title[1], [def.x, def.y, def.z], 0, def.scale ?? 0.2, false);
-		result.makeReflective();
-		return result;
+		return new LogoEntity(assets.models.Title[1], [def.x, def.y, def.z], 0, def.scale ?? 0.2, false);
 	},
 	function spawnGameName(def, assets){ // 26
 		class WobbleEntity extends Entity{
@@ -562,9 +597,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				this.updateMatrix();
 			}
 		}
-		const result = new WobbleEntity(assets.models.Title[0], [def.x, def.y, def.z], 0, def.scale ?? 1, false);
-		result.makeReflective();
-		return result;
+		return new WobbleEntity(assets.models.Title[0], [def.x, def.y, def.z], 0, def.scale ?? 1, false);
 	},
 	function spawnTitleBackround(def, assets){ //27
 		class TitleBackgroundEntity extends Entity {
