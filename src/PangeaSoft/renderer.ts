@@ -22,17 +22,19 @@ import { TextureMapping } from "../TextureHolder";
 import * as UI from "../ui";
 import { assert } from "../util";
 import * as Viewer from '../viewer';
+import * as DebugJunk from "../DebugJunk";
 
-import { Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
+import { AnimatedEntity, Entity, FriendlyNames, getFriendlyName } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
 import { AnimationData, SkeletalMesh } from "./skeleton";
+import { Magenta, Red } from "../Color";
 
 
 export const enum RenderFlags {
 	Translucent		 = 0x400,
 	Skinned			 = 0x200,
 	Reflective       = 0x100,
-	DrawBackfacesSeparately = 0x80,
+	//DrawBackfacesSeparately = 0x80,
 	KeepBackfaces    = 0x40,
 	Unlit			 = 0x20,
 	ScrollUVs        = 0x10,
@@ -43,23 +45,26 @@ export const enum RenderFlags {
 }
 
 export class Program extends DeviceProgram {
-	static a_Position = 0;
-	static a_UVs = 1;
-	static a_Colours = 2;
-	static a_Normals = 3;
-	static a_TextureIds = 4;
-	static a_BoneIds = 5;
+	static readonly a_Position = 0;
+	static readonly a_UVs = 1;
+	static readonly a_Colours = 2;
+	static readonly a_Normals = 3;
+	static readonly a_TextureIds = 4;
+	static readonly a_BoneIds = 5;
 
-	static Max_Bones = 20;
+	static readonly ub_SceneParams = 0;
+	static readonly ub_InstanceParams = 1;
+	static readonly ub_MeshParams = 2;
 
-	static ub_SceneParams = 0;
-	static ub_DrawParams = 1;
-	static ub_Bones = 2;
-
-	constructor(flags : RenderFlags, numLights : number){
+	constructor(flags : RenderFlags, numLights : number, maxBones : number, instanceCount : number){
 		super();
 
 		this.setDefineString("NUM_LIGHTS", numLights.toString());
+		this.setDefineString("MAX_BONES", maxBones.toString());
+		this.setDefineString("MAX_INSTANCES", instanceCount.toString());
+
+		this.setDefineBool("INSTANCED", instanceCount > 1);
+
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
@@ -83,21 +88,34 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
 	vec4 u_TimeVec; // x = time, yzw = unused
+	#define u_Time (u_TimeVec.x)
 };
-#define u_Time (u_TimeVec.x)
-layout(std140) uniform ub_DrawParams {
-	Mat4x3 u_WorldFromModelMatrix;
-	vec4 u_Colour;
+
+layout(std140) uniform InstanceParams {
+	Mat4x3 ui_WorldFromModelMatrix;
+	vec4 ui_Colour;
+	#ifdef SKINNED
+		Mat4x3 ui_Bones[MAX_BONES];
+	#endif
+
+	#ifdef INSTANCED
+		#define INSTANCEID gl_InstanceID
+	#else
+		#define INSTANCEID 0
+	#endif
+	#define u_WorldFromModelMatrix ub_InstanceParams[INSTANCEID].ui_WorldFromModelMatrix
+	#define u_Colour ub_InstanceParams[INSTANCEID].ui_Colour
+	#define u_Bones ub_InstanceParams[INSTANCEID].ui_Bones
+} ub_InstanceParams[MAX_INSTANCES];
+
+layout(std140) uniform ub_PerMeshParams {
+	vec4 u_MeshColour;
 	#ifdef SCROLL_UVS
-	vec4 u_UVScrollVec; // xy = uv, zw = unused
+		vec4 u_UVScrollVec; // xy = uv, zw = unused
+		#define u_UVScroll (u_UVScrollVec.xy)
 	#endif
 };
-#define u_UVScroll (u_UVScrollVec.xy)
-#ifdef SKINNED
-layout(std140) uniform ub_Bones {
-	Mat4x3 u_Bones[${Program.Max_Bones}];
-};
-#endif
+
 `;
 	override vert = 
 `
@@ -140,7 +158,7 @@ void main() {
 	#endif
 
 
-	vec4 colour = u_Colour;
+	vec4 colour = u_Colour * u_MeshColour;
 	#ifdef HAS_VERTEX_COLOURS
 		colour.xyz *= a_Colour;
 	#endif
@@ -224,21 +242,32 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	allModels : StaticObject[] = [];
 	allTextures : GfxTexture[] = [];
 
-	programs = new Map<RenderFlags, GfxProgram>();
-	//programIds = new WeakMap<GfxProgram, number>();
-
+	instancedPrograms = new Map<RenderFlags, GfxProgram>();
+	singlePrograms = new Map<RenderFlags, GfxProgram>();
+	maxBones = 0;
+	maxInstances = 1;
 	numLights = 1;
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
 
-	getProgram(renderFlags : RenderFlags){
-		let program = this.programs.get(renderFlags);
-		if (program) return program;
-		program = this.createProgram(new Program(renderFlags, this.numLights));
-		//if (!this.programIds.has(program))
-		//	this.programIds.set(program, this.programs.size);
-		this.programs.set(renderFlags, program);
+
+	getProgram(renderFlags : RenderFlags, numInstances : number){
+		if (numInstances > this.maxInstances){
+			this.maxInstances = numInstances;
+			this.instancedPrograms.clear();
+			console.warn("too many instances, regenerating all instance shaders");
+			// leak old shaders
+		}
+
+		const isInstanced = numInstances > 1;
+		const programs = isInstanced ? this.instancedPrograms : this.singlePrograms;
+
+		let program = programs.get(renderFlags);
+		if (program)
+			return program;
+		program = this.createProgram(new Program(renderFlags, this.numLights, this.maxBones, isInstanced ? this.maxInstances : 1));
+		programs.set(renderFlags, program);
 		return program;
 	}
 
@@ -328,6 +357,7 @@ export class StaticObject implements Destroyable {
 	renderFlags : RenderFlags = 0;
 	textureMapping : TextureMapping[] = [];
 	renderLayerOffset = 0;
+	animatedObjectParent? : AnimatedObject;
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
 		this.indexCount = mesh.numTriangles * 3;
@@ -431,19 +461,24 @@ export class StaticObject implements Destroyable {
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
 
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity, flipBackfaces = false): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entityOrNumEntities : Entity | number): void {
         const renderInst = renderInstManager.newRenderInst();
 
 		const renderFlags = this.renderFlags;
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
-		const gfxProgram = cache.getProgram(renderFlags);
+		const isInstanced = typeof(entityOrNumEntities) === "number";
+		const numEntites = isInstanced ? entityOrNumEntities : 1;
+
+		const isSkinned = this.animatedObjectParent !== undefined;
+
+		const gfxProgram = cache.getProgram(renderFlags, numEntites);
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
 		if (!hasTexture || textureArray){
 			renderInst.setBindingLayouts([{
-				numUniformBuffers : (renderFlags & RenderFlags.Skinned) ? 3 : 2,
+				numUniformBuffers : 3,
 				numSamplers : hasTexture ? 1 : 0,
 				samplerEntries : textureArray ? [{
 					dimension : GfxTextureDimension.n2DArray,
@@ -455,10 +490,10 @@ export class StaticObject implements Destroyable {
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
 		const keepBackfaces = renderFlags & RenderFlags.KeepBackfaces;
-		const drawBackfacesSeparately = renderFlags & RenderFlags.DrawBackfacesSeparately;
-		if (drawBackfacesSeparately)
-			renderInst.setMegaStateFlags({ cullMode: flipBackfaces ? GfxCullMode.Front : GfxCullMode.Back });
-		else
+		//const drawBackfacesSeparately = renderFlags & RenderFlags.DrawBackfacesSeparately;
+		//if (drawBackfacesSeparately)
+		//	renderInst.setMegaStateFlags({ cullMode: flipBackfaces ? GfxCullMode.Front : GfxCullMode.Back });
+		//else
         	renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
         renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
@@ -475,29 +510,19 @@ export class StaticObject implements Destroyable {
 		}
 		
 		
-        renderInst.drawIndexes(this.indexCount);
 
-		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
+		if (isInstanced)
+			renderInst.drawIndexesInstanced(this.indexCount, numEntites);
+		else {
+        	renderInst.drawIndexes(this.indexCount);
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0));
-		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
-		
-		let modelMatrix : ReadonlyMat4 = entity.modelMatrix;
-		if (this.modelMatrix){
-			modelMatrix = mat4.mul(mat4.create(), modelMatrix, this.modelMatrix); // todo verify multiplication order
-		}
-		
-		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, modelMatrix);
-		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
-
-		if (scrollUVs){
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
-			// repeat for padding
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
+			const instanceBlockSize = 4*3 + 4 + (isSkinned ? 4*3*cache.maxBones : 0);
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, instanceBlockSize);
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+			entityOrNumEntities.populateInstanceBlock(uniformData, uniformOffset);
 		}
 
+		/*
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
 		if (translucent)
 			renderLayer |= GfxRendererLayer.TRANSLUCENT;
@@ -506,11 +531,12 @@ export class StaticObject implements Destroyable {
 			makeSortKey(renderLayer, gfxProgram.ResourceUniqueId),
 			computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entity.position)
 		);
+		*/
 
         renderInstManager.submitRenderInst(renderInst);
 
-		if (drawBackfacesSeparately && !flipBackfaces)
-			this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
+		//if (drawBackfacesSeparately && !flipBackfaces)
+		//	this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
 	}
 
 	destroy(device: GfxDevice): void {
@@ -543,9 +569,11 @@ export class AnimatedObject implements Destroyable{
 	animationData : AnimationData;
 
 	constructor(device : GfxDevice, cache : Cache, skeleton : SkeletalMesh, friendlyNames : FriendlyNames, name : string){
-		this.meshes = skeleton.meshes.map((mesh, index)=>
-			new StaticObject(device, cache, mesh, getFriendlyName(friendlyNames, name, index, 0))
-		);
+		this.meshes = skeleton.meshes.map((mesh, index)=>{
+			const staticObject = new StaticObject(device, cache, mesh, getFriendlyName(friendlyNames, name, index, 0));
+			staticObject.animatedObjectParent = this;
+			return staticObject;
+		});
 		this.animationData = skeleton.animation;
 	}
 
@@ -569,11 +597,17 @@ export type SceneSettings = {
 	// todo: fog
 };
 
+type MeshSet = {
+	meshes : StaticObject[],
+	entities : Entity[],
+};
+
 export class SceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
-    entities: Entity[] = [];
 	cache : Cache;
 	sceneSettings : SceneSettings;
+
+	entitiesByMesh : MeshSet[] = [];
 
 	textureHolder : UI.TextureListHolder;
 
@@ -593,6 +627,40 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
 	}
 
+	protected initEntities(allEntities : Entity[]){
+		
+		// partition entities by mesh
+		const meshes = new Map<StaticObject, MeshSet>();
+		for (const e of allEntities){
+			assert(e.meshes.length > 0, "todo: entities without meshes");
+			const set = meshes.get(e.meshes[0]);
+			if (set){
+				assert(set.meshes.length === e.meshes.length && set.meshes.every((mesh, index)=>mesh === e.meshes[index]), "mesh set mismatch!");
+				set.entities.push(e);
+			} else {
+				const set : MeshSet = {
+					meshes: [...e.meshes],
+					entities : [e],
+				};
+				meshes.set(e.meshes[0], set);
+				this.entitiesByMesh.push(set);
+			}
+		}
+
+		// init shader instance counts
+		const cache = this.cache;
+		for (const set of this.entitiesByMesh){
+			set.entities.length = 1; // todo
+			cache.maxInstances = Math.max(cache.maxInstances, set.entities.length);
+			for (const mesh of set.meshes){
+				const anim = mesh.animatedObjectParent;
+				if (anim){
+					cache.maxBones = Math.max(cache.maxBones, anim.animationData.numBones);
+				}
+			}
+		}
+	}
+
 	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput){
 		const renderInst = this.renderHelper.pushTemplateRenderInst();
 
@@ -601,6 +669,8 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			numSamplers : 1,
 		}]);
 		const numLights = this.cache.numLights;
+
+
 		// set scene uniforms
 		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*numLights + 4);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
@@ -625,35 +695,94 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		uniformData[uniformOffset++] = time;
 		uniformData[uniformOffset++] = time;
 
+		
         const renderInstManager = this.renderHelper.renderInstManager;
 
 		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
-		for (let i = 0; i < this.entities.length; ++i){
-			const entity = this.entities[i];
-			const visible = entity.checkVisible(viewerInput.camera.frustum);
+		const frustum = viewerInput.camera.frustum;
 
-			if (!visible && !entity.alwaysUpdate)
+		const visibleEntities : Entity[] = [];
+		for (const set of this.entitiesByMesh){
+			visibleEntities.length = 0;
+			for (const e of set.entities){
+				const visible = e.doUpdate(dt, frustum);
+				if (visible)
+					visibleEntities.push(e)
+			}
+			if (visibleEntities.length == 0)
 				continue;
 
-			const result : EntityUpdateResult = entity.update(dt);
-			if (result === false){
-				// destroy this entity
-				this.entities.splice(i, 1);
-				--i;
-				continue;
-			}
-			if (result){
-				// created new entity
-				this.entities.push(result);
-			}
-
-			if (visible)
-				entity.prepareToRender(device, renderInstManager, viewerInput, this.cache);
+			this.prepareToRenderMeshSet(device, viewerInput, renderInstManager, set.meshes, visibleEntities);
 		}
-			
+		
         renderInstManager.popTemplateRenderInst();
         this.renderHelper.prepareToRender();
 	}
+
+	prepareToRenderMeshSet(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput, renderInstManager: GfxRenderInstManager, meshes : StaticObject[], entities : Entity[]){
+		const renderInst = renderInstManager.pushTemplateRenderInst();
+		const cache = this.cache;
+
+		const hasScroll = !!(meshes[0].renderFlags & RenderFlags.ScrollUVs);
+		assert(meshes.every((m)=>!!(m.renderFlags & RenderFlags.ScrollUVs) == hasScroll), "inconsistent uniforms");
+
+		const isSkinned = meshes[0].animatedObjectParent !== undefined;
+		assert(meshes.every((m)=>(m.animatedObjectParent !== undefined) === isSkinned), "inconsistent skinning");
+		assert(entities.every((e)=>((e as AnimatedEntity).animationController !== undefined) === isSkinned), "inconsistent entity skinning");
+
+		const isInstanced = entities.length > 1;
+
+		renderInst.setBindingLayouts([{
+			numUniformBuffers : 3,
+			numSamplers : 1,
+		}]);
+
+
+		const canvas = DebugJunk.getDebugOverlayCanvas2D();
+
+		{ // populate mesh uniform
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_MeshParams, hasScroll ? 8 : 4);
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_MeshParams);
+			
+			uniformOffset += fillColor(uniformData, uniformOffset, meshes[0].colour);
+			if (hasScroll){
+				uniformData[uniformOffset++] = meshes[0].scrollUVs[0];
+				uniformData[uniformOffset++] = meshes[0].scrollUVs[1];
+				uniformData[uniformOffset++] = meshes[0].scrollUVs[0]; // padding
+				uniformData[uniformOffset++] = meshes[0].scrollUVs[1];
+			}
+		}
+
+		const instanceBlockSize = 4*3 + 4 + (isSkinned ? 4*3*cache.maxBones : 0);
+		if (isInstanced){
+			 // populate instance uniforms
+			const numInstanceSlots = cache.maxInstances;
+
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, instanceBlockSize * numInstanceSlots);
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+			for (const e of entities){
+				DebugJunk.drawWorldSpaceAABB(canvas, viewerInput.camera.clipFromWorldMatrix, e.aabb, null, Red);
+				e.populateInstanceBlock(uniformData, uniformOffset);
+				uniformOffset += instanceBlockSize;
+			}
+			
+			// draw
+			for (const mesh of meshes){
+				mesh.prepareToRender(device, renderInstManager, viewerInput, cache, entities.length);
+			}
+		} else { // not instanced
+			for (const e of entities){
+				DebugJunk.drawWorldSpaceAABB(canvas, viewerInput.camera.clipFromWorldMatrix, e.aabb, null, Magenta);
+				for (const mesh of meshes){
+					mesh.prepareToRender(device, renderInstManager, viewerInput, cache, e);
+				}
+			}
+		}
+
+
+		renderInstManager.popTemplateRenderInst();
+	}
+	
 
 	public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
         const renderInstManager = this.renderHelper.renderInstManager;

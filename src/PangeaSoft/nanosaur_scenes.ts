@@ -31,18 +31,21 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 
 		this.createModels(device, this.cache, assets);
 
+		const entities : Entity[] = [];
 		if (this.processedAssets.terrain)
-			this.entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
+			entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
 
 		for (const objectDef of objectList){
 			const entity = (entityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, this.processedAssets);
 			if (entity){
 				if (Array.isArray(entity))
-					this.entities.push(...entity);
+					entities.push(...entity);
 				else
-					this.entities.push(entity);
+					entities.push(entity);
 			}
 		}
+
+		this.initEntities(entities);
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : NanosaurRawAssets){

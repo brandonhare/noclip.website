@@ -2,7 +2,7 @@ import { mat4, vec3 } from "gl-matrix";
 import { MathConstants } from "../MathHelpers";
 import { assert, assertExists } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef } from "./entity";
+import { AnimatedEntity, Assets, Entity, FriendlyNames, LevelObjectDef } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 import { TerrainInfo } from "./terrain";
 
@@ -105,7 +105,7 @@ export function initNanosaurMeshRenderSettings(assets : NanosaurProcessedAssets)
 		for (let i = 12; i <= 14; ++i){
 			const crystalModel = level1Models[i][0];
 			crystalModel.makeTranslucent(0.7, false, true);
-			crystalModel.renderFlags |= RenderFlags.DrawBackfacesSeparately;
+			//crystalModel.renderFlags |= RenderFlags.DrawBackfacesSeparately; // todo
 		}
 	}
 
@@ -247,6 +247,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	},
 	function spawnLava(def, assets){ // 4
 
+		/*
 		const fireballMesh = assets.models.Level1_Models[26];
 		const smokeMesh = assets.models.Global_Models[3];
 
@@ -301,7 +302,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 
 		class LavaEntity extends UndulateEntity {
 			fireballTimer = Math.random() * 0.4;
-			override update(dt : number) : FireballEntity | void {
+			override update(dt : number) {
 				super.update(dt);
 				this.fireballTimer += dt;
 				if (this.fireballTimer > 0.4){
@@ -318,7 +319,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				}
 			}
 		}
-		
+		*/
 
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
@@ -326,9 +327,9 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		const scale = (def.param3 & (1<<2)) ? 1 : 2;
 		const shootFireballs = (def.param3 & (1<<1)) !== 0;
 		let result : UndulateEntity;
-		if (shootFireballs && false) // todo optimize
-			result = new LavaEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
-		else
+		// if (shootFireballs && false) // todo optimize
+		// 	result = new LavaEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
+		// else
 			result = new UndulateEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
 		result.baseScale = 0.501;
 		result.amplitude = 0.5;
@@ -373,10 +374,10 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				const y = this.startY + (this.rock ? 300 : 200) + Math.cos(this.t) * 150;
 				this.position[1] = y;
 				this.updateMatrix();
+		
+				super.update(dt); // update skeletal mesh
+		
 				this.shadow.updateShadow(this.terrainInfo, y);
-		
-				super.update(dt);
-		
 				if (this.rock){
 					vec3.set(this.rock.position, 10, -10, 80);
 					vec3.transformMat4(this.rock.position, this.rock.position, this.animationController.boneTransforms[3]);
@@ -393,6 +394,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		ptera.startY = def.y;
 		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
 		const shadow = new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], ptera, def.y, 4, 4.5);
+		shadow.isDynamic = true;
 		ptera.shadow = shadow;
 		const results : Entity[] = [ptera, shadow];
 		if (hasRock) {
@@ -469,7 +471,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		return bush;
 	},
 	function spawnWater(def, assets){ // 14
-		// todo translucency and stuff
 		const x = Math.floor(def.x / 140) * 140 + 140/2
 		const z = Math.floor(def.z / 140) * 140 + 140/2
 		const y = (def.param3 & 1) ? def.y + 50 : 210;
@@ -511,7 +512,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	},
 	// main menu stuff
 	function spawnMenuBackground(def, assets){ // 20
-
+		/*
 		const eggModel = assets.models.MenuInterface[4];
 
 		class EggEntity extends Entity {
@@ -526,16 +527,17 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				this.updateMatrix();
 			}
 		}
+		*/
 
 		class EggSpawnerEntity extends Entity{
 			t = 0;
 			override alwaysUpdate = true;
 
-			override update(dt : number) : EggEntity | void{
+			override update(dt : number){
 
 				this.rotation = (this.rotation + dt) % MathConstants.TAU;
 				this.updateMatrix();
-
+				/*
 				this.t += dt;
 				if (this.t > 0.2){
 					this.t %= 0.2;
@@ -550,6 +552,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 					egg.rotZ = Math.random() * Math.PI;
 					return egg;
 				}
+				*/
 			}
 		};
 
@@ -575,7 +578,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			t = 0;
 			startZ = this.position[2];
 			override alwaysUpdate = true;
-			override update(dt: number): EntityUpdateResult {
+			override update(dt: number) {
 				this.t = (this.t + dt) % 10;
 				this.position[2] = this.startZ + this.t * 45;
 				this.rotation = Math.PI * -0.5 + this.t * Math.PI / 9;
@@ -615,7 +618,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	// high scores stuff
 	function spawnSpiral(def, assets) { // 28
 		class SpiralEntity extends Entity {
-			override update(dt: number): EntityUpdateResult {
+			override update(dt: number) {
 				this.rotX += dt * 1.5;
 				this.updateMatrix();
 			}

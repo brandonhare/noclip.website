@@ -3,7 +3,7 @@ import * as Viewer from '../viewer';
 import { mat4, vec2, vec3 } from "gl-matrix";
 import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 import { AABB, Frustum } from "../Geometry";
-import { fillMatrix4x3 } from "../gfx/helpers/UniformBufferHelpers";
+import { fillColor, fillMatrix4x3 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxColor, GfxDevice } from "../gfx/platform/GfxPlatform";
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
 import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
@@ -55,9 +55,6 @@ export type LevelObjectDef = {
 	scale? : number,
 };
 
-// nothing | delete this | spawn new entity
-export type EntityUpdateResult = void | false | Entity;
-
 export class Entity {
 	meshes : StaticObject[];
 	position: vec3;
@@ -69,6 +66,7 @@ export class Entity {
 	aabb : AABB = new AABB();
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	alwaysUpdate = false;
+	isDynamic? : boolean; // if this entity will be updated even without its own update() method
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
@@ -109,16 +107,20 @@ export class Entity {
 		this.aabb.transform(this.aabb, this.modelMatrix);
 	}
 
-	checkVisible(frustum : Frustum){
-		return frustum.contains(this.aabb);
-	}
-
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
-		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
+	doUpdate(dt : number, frustum : Frustum){
+		const visible = frustum.contains(this.aabb);
+		if (this.update && (visible || this.alwaysUpdate))
+			this.update(dt);
+		return visible;
 	}
 	
-	update(dt : number) : EntityUpdateResult {}
+	populateInstanceBlock(uniformData : Float32Array, uniformOffset : number){
+		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, this.modelMatrix);
+		uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
+		return 4*3+4;
+	}
+
+	update?(dt : number):void;
 }
 
 
@@ -139,6 +141,16 @@ export class AnimatedEntity extends Entity{
 
 	setAnimation(animationIndex : number, animationSpeed : number){
 		this.animationController.setAnimation(animationIndex, animationSpeed);
+	}
+
+	override populateInstanceBlock(uniformData : Float32Array, uniformOffset : number){
+		const initialOffset = super.populateInstanceBlock(uniformData, uniformOffset);
+		uniformOffset += initialOffset
+		const bones = this.animationController.boneTransforms;
+		for (let i = 0; i < bones.length; ++i){
+			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bones[i]);
+		}
+		return initialOffset + bones.length*4*3;
 	}
 
 	debugDrawSkeleton(clipFromWorldMatrix : mat4){
@@ -162,32 +174,5 @@ export class AnimatedEntity extends Entity{
 
 			drawWorldSpaceLine(c, clipFromWorldMatrix, p1, p2);
 		}
-	}
-
-	override prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
-
-		if (!viewerInput.camera.frustum.contains(this.aabb)){
-			return;
-		}
-
-		//this.debugDrawSkeleton(viewerInput.camera.clipFromWorldMatrix);
-
-		const renderInst = renderInstManager.pushTemplateRenderInst();
-		
-		renderInst.setBindingLayouts([{
-			numUniformBuffers : 3,
-			numSamplers : 1,
-		}]);
-		
-		const numTransforms = this.animationController.boneTransforms.length;
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_Bones, Program.Max_Bones * 4*3);
-		const uniformData = renderInst.mapUniformBufferF32(Program.ub_Bones);
-		for (let i = 0; i < numTransforms; ++i)
-			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, this.animationController.boneTransforms[i]);
-
-		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
-
-		renderInstManager.popTemplateRenderInst();
 	}
 }

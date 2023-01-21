@@ -2,7 +2,7 @@ import { mat4, quat, vec3 } from "gl-matrix";
 import { lerp, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef } from "./entity";
+import { AnimatedEntity, Assets, Entity, FriendlyNames, LevelObjectDef } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
 
 export type BugdomProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject[]>
