@@ -4,9 +4,12 @@ import { assert } from "../util";
 
 import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef } from "./entity";
 import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
+import { TerrainInfo } from "./terrain";
 
-export type BugdomProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject[]>
-	& { levelType : BugdomLevelType };
+export type BugdomProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject[], TerrainInfo[]>
+	& {
+		levelType : BugdomLevelType,
+	};
 
 export const ModelSetNames = [
 	"AntHill_Models",

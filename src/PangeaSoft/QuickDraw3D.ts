@@ -14,7 +14,6 @@ export type Qd3DMesh = {
 	aabb : AABB, // baseTransform is already taken into account
 	colour : GfxColor;
 	texture? : Qd3DTexture;
-	baseTransform? : ReadonlyMat4;
 
 	indices : Uint16Array | Uint32Array;
 	vertices : Float32Array | Uint16Array;

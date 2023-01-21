@@ -157,7 +157,6 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		aabb : new AABB(0, minY * HEIGHT_SCALE, 0, terrainWidth * TERRAIN_POLYGON_SIZE, maxY * HEIGHT_SCALE, terrainDepth * TERRAIN_POLYGON_SIZE),
 		colour: { r: 1, g: 1, b: 1, a: 1 },
 		texture,
-		baseTransform: mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, HEIGHT_SCALE, TERRAIN_POLYGON_SIZE]),
 		indices,
 		vertices: vertices,
 		normals: normals,

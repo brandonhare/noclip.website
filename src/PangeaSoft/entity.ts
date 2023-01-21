@@ -14,7 +14,7 @@ import { AnimationController } from "./skeleton";
 import { TerrainInfo } from "./terrain";
 
 
-export type Assets<MeshType, SkeletonType, TerrainType> = {
+export type Assets<MeshType, SkeletonType, TerrainType, TerrainInfoType=TerrainInfo> = {
 	models : {
 		[name : string] : MeshType[][]
 	}
@@ -22,7 +22,7 @@ export type Assets<MeshType, SkeletonType, TerrainType> = {
 		[name : string] : SkeletonType
 	}
 	terrain : TerrainType
-	terrainInfo? : TerrainInfo
+	terrainInfo? : TerrainInfoType
 };
 
 export type FriendlyNames = {[set:string]:(string | string[])[]};

@@ -28,10 +28,15 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		this.createModels(device, this.cache, assets);
 		this.processedAssets.levelType = levelType;
 
-		if (this.processedAssets.terrain)
-			this.entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
-
-		for (const terrain of this.processedAssets.terrain){
+		for (let i = 0; i < this.processedAssets.terrain.length; ++i){
+			const terrainMesh = this.processedAssets.terrain[i];
+			const terrainInfo = this.processedAssets.terrainInfo![i];
+			const terrainEntity = new Entity([terrainMesh], [0,0,0],0,1,false);
+			terrainEntity.scale[0] = terrainInfo.xzScale;
+			terrainEntity.scale[1] = terrainInfo.yScale;
+			terrainEntity.scale[2] = terrainInfo.xzScale;
+			terrainEntity.updateMatrix();
+			this.entities.push(terrainEntity);
 		}
 
 		for (const objectDef of objectList){
@@ -51,7 +56,8 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			models : {},
 			skeletons : {},
 			terrain : [],
-			levelType : BugdomLevelType.Lawn
+			levelType : BugdomLevelType.Lawn,
+			terrainInfo : rawAssets.terrain?.infos ?? [],
 		}
 
 		if (rawAssets.terrain){
@@ -114,7 +120,7 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 		const terrainPromise = scene.terrain
 			? context.dataFetcher.fetchData(`${pathBase}/Terrain/${scene.terrain}.ter.rsrc`)
 				.then((data)=>parseBugdomTerrain(parseAppleDouble(data), this.def.hasCeiling))
-			: {items:[], meshes:[], splines:[], fences:[]};
+			: {items:[], meshes:[], splines:[], fences:[], infos:[]};
 
 		const models = await modelPromises;
 		const skeletons = await skeletonPromises;

@@ -31,8 +31,15 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 
 		this.createModels(device, this.cache, assets);
 
-		if (this.processedAssets.terrain)
-			this.entities.push(new Entity(this.processedAssets.terrain, [0,0,0],0,1,false));
+		if (this.processedAssets.terrain){
+			const info = this.processedAssets.terrainInfo!;
+			const terrainEntity = new Entity(this.processedAssets.terrain, [0,0,0],0,1,false);
+			terrainEntity.scale[0] = info.xzScale;
+			terrainEntity.scale[1] = info.yScale;
+			terrainEntity.scale[2] = info.xzScale;
+			terrainEntity.updateMatrix();
+			this.entities.push(terrainEntity);
+		}
 
 		for (const objectDef of objectList){
 			const entity = (entityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, this.processedAssets);

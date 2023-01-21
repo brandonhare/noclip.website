@@ -43,6 +43,7 @@ type SplineItemDef = {
 export type ParsedBugdomTerrain = {
 	meshes : Qd3DMesh[],
 	items : LevelObjectDef[],
+	infos : TerrainInfo[],
 
 	splines : SplineDef[],
 	fences : FenceDef[],
@@ -168,15 +169,12 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 
 		const aabb = new AABB(0, minY * yScale, 0, mapWidth * TERRAIN_POLYGON_SIZE, maxY * yScale, mapHeight * TERRAIN_POLYGON_SIZE);
 
-		const baseTransform = mat4.fromScaling(mat4.create(), [TERRAIN_POLYGON_SIZE, yScale, TERRAIN_POLYGON_SIZE]);
-
 		const mesh : Qd3DMesh = {
 			numTriangles : mapWidth * mapHeight * 2,
 			numVertices,
 			aabb,
 			colour : { r : 1, g : 1, b : 1, a : 1 },
 			texture,
-			baseTransform,
 		
 			indices,
 			vertices,
@@ -285,5 +283,6 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		items,
 		splines,
 		fences,
+		infos,
 	};
 }

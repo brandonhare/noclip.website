@@ -321,7 +321,6 @@ export class StaticObject implements Destroyable {
 	buffers : GfxBuffer[] = [];
 	inputLayout : GfxInputLayout;
 	inputState : GfxInputState;
-	modelMatrix? : mat4 = undefined;
 	aabb : AABB;
 	colour : GfxColor;
 	scrollUVs : vec2 = [0,0];
@@ -333,8 +332,6 @@ export class StaticObject implements Destroyable {
 		this.indexCount = mesh.numTriangles * 3;
 		this.aabb = mesh.aabb;
 		this.colour = mesh.colour;
-		if (mesh.baseTransform)
-			this.modelMatrix = mat4.clone(mesh.baseTransform);
 
 		cache.addModel(this);
 
@@ -482,12 +479,7 @@ export class StaticObject implements Destroyable {
 		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
-		let modelMatrix : ReadonlyMat4 = entity.modelMatrix;
-		if (this.modelMatrix){
-			modelMatrix = mat4.mul(mat4.create(), modelMatrix, this.modelMatrix); // todo verify multiplication order
-		}
-		
-		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, modelMatrix);
+		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
 		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
 
 		if (scrollUVs){

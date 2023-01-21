@@ -10,14 +10,14 @@ export class TerrainInfo {
 		this.width = width;
 		this.height = height;
 		this.stride = width + 1;
-		this.xzScale = 1 / xzScale;
+		this.xzScale = xzScale;
 		this.yScale = yScale;
 		this.heightmap = heightmap;
 	}
 
 	getHeight(x : number, z : number) : number {
-		x *= this.xzScale;
-		z *= this.xzScale;
+		x /= this.xzScale;
+		z /= this.xzScale;
 		const row = Math.floor(z);
 		const col = Math.floor(x);
 		const baseIndex = row * this.stride + col;
