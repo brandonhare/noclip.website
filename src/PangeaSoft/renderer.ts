@@ -23,7 +23,7 @@ import * as UI from "../ui";
 import { assert } from "../util";
 import * as Viewer from '../viewer';
 
-import { Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
+import { AnimatedEntity, Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
 import { AnimationData, SkeletalMesh } from "./skeleton";
 
@@ -54,7 +54,6 @@ export class Program extends DeviceProgram {
 
 	static ub_SceneParams = 0;
 	static ub_DrawParams = 1;
-	static ub_Bones = 2;
 
 	constructor(flags : RenderFlags, numLights : number){
 		super();
@@ -83,21 +82,22 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
 	vec4 u_TimeVec; // x = time, yzw = unused
+	#define u_Time (u_TimeVec.x)
 };
-#define u_Time (u_TimeVec.x)
+
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
 	vec4 u_Colour;
+	
 	#ifdef SCROLL_UVS
-	vec4 u_UVScrollVec; // xy = uv, zw = unused
+		vec4 u_UVScrollVec; // xy = uv, zw = unused
+		#define u_UVScroll (u_UVScrollVec.xy)
+	#endif
+
+	#ifdef SKINNED
+		Mat4x3 u_Bones[${Program.Max_Bones}];
 	#endif
 };
-#define u_UVScroll (u_UVScrollVec.xy)
-#ifdef SKINNED
-layout(std140) uniform ub_Bones {
-	Mat4x3 u_Bones[${Program.Max_Bones}];
-};
-#endif
 `;
 	override vert = 
 `
@@ -434,13 +434,15 @@ export class StaticObject implements Destroyable {
 		const renderFlags = this.renderFlags;
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
+		const skinned = !!(renderFlags & RenderFlags.Skinned);
+
 		const gfxProgram = cache.getProgram(renderFlags);
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
 		if (!hasTexture || textureArray){
 			renderInst.setBindingLayouts([{
-				numUniformBuffers : (renderFlags & RenderFlags.Skinned) ? 3 : 2,
+				numUniformBuffers : 2,
 				numSamplers : hasTexture ? 1 : 0,
 				samplerEntries : textureArray ? [{
 					dimension : GfxTextureDimension.n2DArray,
@@ -476,7 +478,7 @@ export class StaticObject implements Destroyable {
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0));
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0) + (skinned?4*3*Program.Max_Bones:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
 		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
@@ -488,6 +490,13 @@ export class StaticObject implements Destroyable {
 			// repeat for padding
 			uniformData[uniformOffset++] = this.scrollUVs[0];
 			uniformData[uniformOffset++] = this.scrollUVs[1];
+		}
+
+		if (skinned){
+			const bones = (entity as AnimatedEntity).animationController.boneTransforms;
+			for (const bone of bones)
+				uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
+			uniformOffset += (Program.Max_Bones - bones.length )*4*3;
 		}
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;

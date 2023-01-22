@@ -163,31 +163,4 @@ export class AnimatedEntity extends Entity{
 			drawWorldSpaceLine(c, clipFromWorldMatrix, p1, p2);
 		}
 	}
-
-	override prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
-
-		if (!viewerInput.camera.frustum.contains(this.aabb)){
-			return;
-		}
-
-		//this.debugDrawSkeleton(viewerInput.camera.clipFromWorldMatrix);
-
-		const renderInst = renderInstManager.pushTemplateRenderInst();
-		
-		renderInst.setBindingLayouts([{
-			numUniformBuffers : 3,
-			numSamplers : 1,
-		}]);
-		
-		const numTransforms = this.animationController.boneTransforms.length;
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_Bones, Program.Max_Bones * 4*3);
-		const uniformData = renderInst.mapUniformBufferF32(Program.ub_Bones);
-		for (let i = 0; i < numTransforms; ++i)
-			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, this.animationController.boneTransforms[i]);
-
-		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
-
-		renderInstManager.popTemplateRenderInst();
-	}
 }
