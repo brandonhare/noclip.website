@@ -43,22 +43,29 @@ export const enum RenderFlags {
 }
 
 export class Program extends DeviceProgram {
-	static a_Position = 0;
-	static a_UVs = 1;
-	static a_Colours = 2;
-	static a_Normals = 3;
-	static a_TextureIds = 4;
-	static a_BoneIds = 5;
+	static readonly a_Position = 0;
+	static readonly a_UVs = 1;
+	static readonly a_Colours = 2;
+	static readonly a_Normals = 3;
+	static readonly a_TextureIds = 4;
+	static readonly a_BoneIds = 5;
+ 
+	static readonly ub_SceneParams = 0;
+	static readonly ub_InstanceParams = 1;
+	static readonly ub_MeshParams = 2;
 
-	static Max_Bones = 20;
+	// which flags affect per-instance uniform layout
+	static readonly InstanceUniformRenderFlags = RenderFlags.Skinned;
+	// which flags affect per-mesh uniform layout
+	static readonly MeshUniformRenderFlags = RenderFlags.ScrollUVs;
 
-	static ub_SceneParams = 0;
-	static ub_DrawParams = 1;
-
-	constructor(flags : RenderFlags, numLights : number){
+	constructor(flags : RenderFlags, numLights : number, maxBones : number, maxInstances : number){
 		super();
 
 		this.setDefineString("NUM_LIGHTS", numLights.toString());
+		this.setDefineString("MAX_BONES", maxBones.toString());
+		this.setDefineString("MAX_INSTANCES", maxInstances.toString());
+
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
@@ -85,17 +92,28 @@ layout(std140) uniform ub_SceneParams {
 	#define u_Time (u_TimeVec.x)
 };
 
-layout(std140) uniform ub_DrawParams {
-	Mat4x3 u_WorldFromModelMatrix;
-	vec4 u_Colour;
+struct Params {
+	Mat4x3 ui_WorldFromModelMatrix;
+	vec4 ui_InstanceColour;
 	
+	#ifdef SKINNED
+		Mat4x3 ui_Bones[MAX_BONES];
+	#endif
+};
+layout(std140) uniform InstanceParams {
+	Params ub_InstanceParams[MAX_INSTANCES];
+
+	#define u_WorldFromModelMatrix ub_InstanceParams[gl_InstanceID].ui_WorldFromModelMatrix
+	#define u_InstanceColour ub_InstanceParams[gl_InstanceID].ui_InstanceColour
+	#define u_Bones ub_InstanceParams[gl_InstanceID].ui_Bones
+};
+
+layout(std140) uniform ub_MeshParams {
+	vec4 u_MeshColour;
+
 	#ifdef SCROLL_UVS
 		vec4 u_UVScrollVec; // xy = uv, zw = unused
 		#define u_UVScroll (u_UVScrollVec.xy)
-	#endif
-
-	#ifdef SKINNED
-		Mat4x3 u_Bones[${Program.Max_Bones}];
 	#endif
 };
 `;
@@ -140,7 +158,7 @@ void main() {
 	#endif
 
 
-	vec4 colour = u_Colour;
+	vec4 colour = u_MeshColour * u_InstanceColour;
 	#ifdef HAS_VERTEX_COLOURS
 		colour.xyz *= a_Colour;
 	#endif
@@ -228,6 +246,8 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	//programIds = new WeakMap<GfxProgram, number>();
 
 	numLights = 1;
+	maxBones = 0;
+	maxInstances = 1;
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
@@ -235,7 +255,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	getProgram(renderFlags : RenderFlags){
 		let program = this.programs.get(renderFlags);
 		if (program) return program;
-		program = this.createProgram(new Program(renderFlags, this.numLights));
+		program = this.createProgram(new Program(renderFlags, this.numLights, this.maxBones, this.maxInstances));
 		//if (!this.programIds.has(program))
 		//	this.programIds.set(program, this.programs.size);
 		this.programs.set(renderFlags, program);
@@ -442,7 +462,7 @@ export class StaticObject implements Destroyable {
 
 		if (!hasTexture || textureArray){
 			renderInst.setBindingLayouts([{
-				numUniformBuffers : 2,
+				numUniformBuffers : 3,
 				numSamplers : hasTexture ? 1 : 0,
 				samplerEntries : textureArray ? [{
 					dimension : GfxTextureDimension.n2DArray,
@@ -478,25 +498,36 @@ export class StaticObject implements Destroyable {
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0) + (skinned?4*3*Program.Max_Bones:0));
-		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
-		
-		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
-		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
+		// fill mesh uniforms
+		{
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_MeshParams, 4 + (scrollUVs?4:0));
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_MeshParams);
 
-		if (scrollUVs){
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
-			// repeat for padding
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
+			uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
+
+			if (scrollUVs){
+				uniformData[uniformOffset++] = this.scrollUVs[0];
+				uniformData[uniformOffset++] = this.scrollUVs[1];
+				// repeat for padding
+				uniformData[uniformOffset++] = this.scrollUVs[0];
+				uniformData[uniformOffset++] = this.scrollUVs[1];
+			}
 		}
 
-		if (skinned){
-			const bones = (entity as AnimatedEntity).animationController.boneTransforms;
-			for (const bone of bones)
-				uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
-			uniformOffset += (Program.Max_Bones - bones.length )*4*3;
+		// fill instance uniforms
+		{
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, 4*3 + 4 + (skinned?4*3*cache.maxBones:0));
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+			
+			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
+			uniformOffset += fillColor(uniformData, uniformOffset, entity.colour);
+
+			if (skinned){
+				const bones = (entity as AnimatedEntity).animationController.boneTransforms;
+				for (const bone of bones)
+					uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
+				uniformOffset += (cache.maxBones - bones.length)*4*3;
+			}
 		}
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
@@ -548,6 +579,9 @@ export class AnimatedObject implements Destroyable{
 			new StaticObject(device, cache, mesh, getFriendlyName(friendlyNames, name, index, 0))
 		);
 		this.animationData = skeleton.animation;
+
+		if (this.animationData.numBones > cache.maxBones)
+			cache.maxBones = this.animationData.numBones;
 	}
 
 	destroy(device: GfxDevice): void {
@@ -598,7 +632,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		const renderInst = this.renderHelper.pushTemplateRenderInst();
 
 		renderInst.setBindingLayouts([{
-			numUniformBuffers : 2,
+			numUniformBuffers : 3,
 			numSamplers : 1,
 		}]);
 		const numLights = this.cache.numLights;
