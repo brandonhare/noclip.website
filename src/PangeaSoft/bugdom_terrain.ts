@@ -1,8 +1,7 @@
-import { mat4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
-import { GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxFormat, GfxTexFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { assert, assertExists } from "../util";
 
 import { ResourceFork } from "./AppleDouble";
@@ -87,9 +86,10 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		height : textureTileSize,
 		numTextures : numTilesInList,
 		pixelFormat : GfxFormat.U16_RGBA_5551,
+		filterMode : GfxTexFilterMode.Point,
 		alpha : AlphaType.Opaque,
-		wrapU: GfxWrapMode.Mirror,
-		wrapV: GfxWrapMode.Mirror,
+		wrapU: GfxWrapMode.Clamp,
+		wrapV: GfxWrapMode.Clamp,
 		pixels : tileImageData,
 	};
 

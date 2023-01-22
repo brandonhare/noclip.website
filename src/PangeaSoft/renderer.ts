@@ -11,7 +11,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { makeAttachmentClearDescriptor, makeBackbufferDescSimple, pushAntialiasingPostProcessPass } from "../gfx/helpers/RenderGraphHelpers";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBlendFactor, GfxBlendMode, GfxBufferUsage, GfxColor, GfxCullMode, GfxDevice, GfxIndexBufferDescriptor, GfxInputLayoutBufferDescriptor, GfxMipFilterMode, GfxSamplerFormatKind, GfxTexFilterMode, GfxTextureDimension, GfxTextureUsage, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxVertexBufferFrequency } from "../gfx/platform/GfxPlatform";
+import { GfxBlendFactor, GfxBlendMode, GfxBufferUsage, GfxColor, GfxCullMode, GfxDevice, GfxIndexBufferDescriptor, GfxInputLayoutBufferDescriptor, GfxMipFilterMode, GfxSamplerFormatKind, GfxTexFilterMode, GfxTextureDimension, GfxTextureUsage, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { GfxBuffer, GfxInputLayout, GfxInputState, GfxProgram, GfxTexture } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
@@ -26,10 +26,14 @@ import { assert, assertExists } from "../util";
 
 import { AnimatedEntity, Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
-import { AnimationData, SkeletalMesh } from "./skeleton";
+import { AnimationData, calculateAnimationTransforms, SkeletalMesh } from "./skeleton";
 
 // Settings
-const MeshMergeThreshold = 10;
+const enum Settings {
+	MeshMergeThreshold = 10,
+	AnimationTextureFps = 30,
+	DefaultTexFilter = GfxTexFilterMode.Bilinear,
+};
 
 
 export const enum RenderFlags {
@@ -47,17 +51,18 @@ export const enum RenderFlags {
 }
 
 export class Program extends DeviceProgram {
-	static a_Position = 0;
-	static a_UVs = 1;
-	static a_Colours = 2;
-	static a_Normals = 3;
-	static a_TextureIds = 4;
-	static a_BoneIds = 5;
+	static readonly a_Position = 0;
+	static readonly a_UVs = 1;
+	static readonly a_Colours = 2;
+	static readonly a_Normals = 3;
+	static readonly a_TextureIds = 4;
+	static readonly a_BoneIds = 5;
 
-	static Max_Bones = 20;
+	static readonly ub_SceneParams = 0;
+	static readonly ub_DrawParams = 1;
 
-	static ub_SceneParams = 0;
-	static ub_DrawParams = 1;
+	static readonly s_Texture = 0;
+	static readonly s_AnimTexture = 1;
 
 	constructor(flags : RenderFlags, numLights : number){
 		super();
@@ -99,7 +104,7 @@ layout(std140) uniform ub_DrawParams {
 	#endif
 
 	#ifdef SKINNED
-		Mat4x3 u_Bones[${Program.Max_Bones}];
+		vec4 u_AnimParams;
 	#endif
 };
 `;
@@ -112,86 +117,110 @@ layout(location = ${Program.a_Colours}) in vec3 a_Colour;
 layout(location = ${Program.a_TextureIds}) in float a_TextureId;
 layout(location = ${Program.a_BoneIds}) in float a_BoneId;
 
+#ifdef SKINNED
+	layout(binding=${Program.s_AnimTexture}) uniform sampler2D u_AnimTexture;
+#endif
+
 out vec4 v_Colour;
 out vec2 v_UV;
 flat out int v_Id;
 
+
 ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
-	v_UV = a_UV;
-	#ifdef TILEMAP
-		v_UV = a_Position.xz;
-		v_Id = int(a_TextureId);
-	#endif
 
 	vec3 localPos = a_Position;
 	vec3 localNormal = a_Normal;
 
-	#ifdef SKINNED
-		int boneId = int(a_BoneId);
+	vec4 colour = u_Colour;
+	vec2 uv = a_UV;
 
-		localPos = Mul(u_Bones[boneId], vec4(localPos, 1.0));
-		//localNormal = MulNormalMatrix(u_Bones[boneId], localNormal);
-		localNormal = Mul(u_Bones[boneId], vec4(localNormal, 0.0));
+	#ifdef TILEMAP
+		uv = a_Position.xz;
+		v_Id = int(a_TextureId);
+	#endif
+
+
+	#ifdef SKINNED
+	{
+		float animT = u_AnimParams.x;
+		float texelWidth = u_AnimParams.y;
+
+		vec2 boneUv = vec2((a_BoneId * 3.0 + 0.5) * texelWidth, animT);
+
+		Mat4x3 boneMat = _Mat4x3(1.0);
+		boneMat.mx = texture(SAMPLER_2D(u_AnimTexture), boneUv);
+		boneMat.my = texture(SAMPLER_2D(u_AnimTexture), boneUv + vec2(texelWidth, 0.0));
+		boneMat.mz = texture(SAMPLER_2D(u_AnimTexture), boneUv + vec2(texelWidth * 2.0, 0.0));
+
+		localPos = Mul(boneMat, vec4(localPos, 1.0));
+		localNormal = Mul(boneMat, vec4(localNormal, 0.0));
+	}
 	#endif
 	
 	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(localPos, 1.0));
 	vec3 worldNormal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, localNormal));
 
 	#ifdef REFLECTIVE
-		v_UV = normalize(reflect(u_CameraPos.xyz - worldPos, worldNormal)).xy * 0.5 + 0.5;
+		uv = normalize(reflect(u_CameraPos.xyz - worldPos, worldNormal)).xy * 0.5 + 0.5;
 	#endif
 
 
-	vec4 colour = u_Colour;
 	#ifdef HAS_VERTEX_COLOURS
 		colour.xyz *= a_Colour;
 	#endif
 
 	#ifndef UNLIT
+	{   // do lighting
 		vec3 lightColour = u_AmbientColour.xyz;
 		for (int i = 0; i < NUM_LIGHTS; ++i){
 			lightColour += max(0.0, dot(u_Lights[i].direction.xyz, worldNormal)) * u_Lights[i].colour.xyz;
 		}
 		colour.xyz *= lightColour;
+	}
 	#endif
-
+	v_UV = uv;
 	v_Colour = colour;
     gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
 }
 `;
 	override frag = 
 `
+
 #ifdef TILEMAP
+	layout(binding=${Program.s_Texture}) uniform sampler2DArray u_TilemapTexture;
 	precision mediump float;
 	precision lowp sampler2DArray;
-	uniform sampler2DArray u_TilemapTexture;
 	flat in int v_Id;
 #else
-	uniform sampler2D u_Texture;
+	#ifdef HAS_TEXTURE
+		layout(binding=${Program.s_Texture}) uniform sampler2D u_Texture;
+	#endif
 #endif
+
 in vec4 v_Colour;
 in vec2 v_UV;
 
 void main(){
 	vec4 colour = v_Colour;
+	vec2 uv = v_UV;
+
+	#ifdef SCROLL_UVS
+		uv += u_UVScroll * u_Time;
+	#endif
 	
 	#ifdef HAS_TEXTURE
-
+	{
 		#ifndef TILEMAP
-			vec2 uv = v_UV;
-			#ifdef SCROLL_UVS
-				uv += u_UVScroll * u_Time;
-			#endif
+			// normal texture
 			vec4 texColour = texture(SAMPLER_2D(u_Texture), uv);
 			#ifdef TEXTURE_HAS_ONE_BIT_ALPHA
 				if (texColour.a < 0.5) { discard; }
 			#endif
 			colour *= texColour;
-		#else
-			//vec2 uv = mix(vec2(0.015625,0.015625), vec2(0.984375,0.984375), fract(v_UV));
-			vec2 uv = fract(v_UV);
+		#else // tilemap
+			uv = fract(uv);
 
 			int textureId = v_Id & 0xFFF;
 
@@ -211,8 +240,8 @@ void main(){
 			#endif
 			colour *= texColour;
 		#endif // end ifdef tilemap
+	}
 	#endif
-	
 
 	gl_FragColor = colour;
 }
@@ -246,7 +275,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		return program;
 	}
 
-	createTexture(texture : Qd3DTexture, name : string){
+	createTexture(texture : Qd3DTexture, name : string, addToViewer = true){
 		let result = this.textureFromSourceCache.get(texture);
 		if (result === undefined){
 			result = this.device.createTexture({
@@ -262,32 +291,34 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			this.allTextures.push(result);
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
-			if (texture.numTextures === 1){
-				this.viewerTextures.push({
-					name,
-					surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)],
-				});
-			} else {
-				this.viewerTextures.push({
-					name: `${name} (${texture.numTextures} tiles)`,
-					surfaces : [textureArrayToCanvas(texture)],
-				});
+			if (addToViewer){
+				if (texture.numTextures === 1){
+					this.viewerTextures.push({
+						name,
+						surfaces : [convertToCanvas(new ArrayBufferSlice(texture.pixels.buffer, texture.pixels.byteOffset, texture.pixels.byteLength), texture.width, texture.height, texture.pixelFormat)],
+					});
+				} else {
+					this.viewerTextures.push({
+						name: `${name} (${texture.numTextures} tiles)`,
+						surfaces : [textureArrayToCanvas(texture)],
+					});
+				}
 			}
 		}
 		return result;
 	}
 
-	createTextureMapping(texture : Qd3DTexture, name : string){
+	createTextureMapping(texture : Qd3DTexture, name : string, addToViewer = true, filtering = texture.filterMode ?? (Settings.DefaultTexFilter as number as GfxTexFilterMode)){
 		const mapping = new TextureMapping();
-		mapping.gfxTexture = this.createTexture(texture, name);
+		mapping.gfxTexture = this.createTexture(texture, name, addToViewer);
 
 		
 		mapping.gfxSampler = this.createSampler({
-			magFilter : GfxTexFilterMode.Point,
-			minFilter : GfxTexFilterMode.Point,
+			magFilter : filtering,
+			minFilter : filtering,
 			wrapS : texture.wrapU,
 			wrapT : texture.wrapV,
-			mipFilter : GfxMipFilterMode.NoMip,
+			mipFilter : GfxMipFilterMode.Nearest,
 		});
 		
 		
@@ -326,7 +357,7 @@ export class StaticObject implements Destroyable {
 	colour : GfxColor;
 	scrollUVs : vec2 = [0,0];
 	renderFlags : RenderFlags = 0;
-	textureMapping : TextureMapping[] = [];
+	textureMapping? : TextureMapping = undefined;
 	renderLayerOffset = 0;
 
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
@@ -397,7 +428,7 @@ export class StaticObject implements Destroyable {
 		if (texture){
 			assert(hasUvs || hasTilemap, "model has texture but no UVs!");
 
-			this.textureMapping.push(cache.createTextureMapping(texture, name));
+			this.textureMapping = cache.createTextureMapping(texture, name);
 
 			this.renderFlags |= RenderFlags.HasTexture;
 			if (texture.alpha === AlphaType.OneBitAlpha)
@@ -441,16 +472,32 @@ export class StaticObject implements Destroyable {
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
-		if (!hasTexture || textureArray){
+		const numSamplers = skinned ? 2 : (hasTexture ? 1 : 0);
+		if (numSamplers === 0){
+			renderInst.setBindingLayouts([{
+				numUniformBuffers:2,
+				numSamplers:0
+			}]);
+		} else if (textureArray || skinned){
+			const texEntry = {
+				dimension : textureArray ? GfxTextureDimension.n2DArray : GfxTextureDimension.n2D,
+				formatKind : GfxSamplerFormatKind.Float,
+			};
 			renderInst.setBindingLayouts([{
 				numUniformBuffers : 2,
-				numSamplers : hasTexture ? 1 : 0,
-				samplerEntries : textureArray ? [{
-					dimension : GfxTextureDimension.n2DArray,
-					formatKind : GfxSamplerFormatKind.Float,
-				}] : undefined
+				numSamplers,
+				samplerEntries:
+					skinned ? [texEntry, {
+						dimension :  GfxTextureDimension.n2D,
+						formatKind : GfxSamplerFormatKind.Float,
+					}] : [texEntry]
 			}]);
 		}
+		const animEntity = (entity as AnimatedEntity);
+        renderInst.setSamplerBindingsFromTextureMappings([
+			this.textureMapping ?? null,
+			skinned ? assertExists(animEntity.animatedObject!.animTextures[animEntity.animationController.currentAnimationIndex], "anim texture missing!") : null
+		]);
 
         renderInst.setGfxProgram(gfxProgram);
         renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
@@ -460,7 +507,6 @@ export class StaticObject implements Destroyable {
 			renderInst.setMegaStateFlags({ cullMode: flipBackfaces ? GfxCullMode.Front : GfxCullMode.Back });
 		else
         	renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
-        renderInst.setSamplerBindingsFromTextureMappings(this.textureMapping);
 	
 		
 		if (translucent){
@@ -479,7 +525,7 @@ export class StaticObject implements Destroyable {
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0) + (skinned?4*3*Program.Max_Bones:0));
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0) + (skinned?4:0));
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
 		
 		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
@@ -494,10 +540,10 @@ export class StaticObject implements Destroyable {
 		}
 
 		if (skinned){
-			const bones = (entity as AnimatedEntity).animationController.boneTransforms;
-			for (const bone of bones)
-				uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
-			uniformOffset += (Program.Max_Bones - bones.length )*4*3;
+			const animController = (entity as AnimatedEntity).animationController;
+			const t = animController.t / animController.animation.anims[animController.currentAnimationIndex].endTime;
+			const texelWidth = 1 / (animController.animation.numBones * 3);
+			uniformOffset += fillVec4(uniformData, uniformOffset, t, texelWidth,0,0);
 		}
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
@@ -540,20 +586,65 @@ export class StaticObject implements Destroyable {
 	}
 }
 
-export class AnimatedObject implements Destroyable{
+export class AnimatedObject {
 	meshes : StaticObject[];
 	animationData : AnimationData;
+	animTextures : (TextureMapping|undefined)[];
 
 	constructor(device : GfxDevice, cache : Cache, skeleton : SkeletalMesh, friendlyNames : FriendlyNames, name : string){
 		this.meshes = skeleton.meshes.map((mesh, index)=>
 			new StaticObject(device, cache, mesh, getFriendlyName(friendlyNames, name, index, 0))
 		);
 		this.animationData = skeleton.animation;
+		this.animTextures = new Array(skeleton.animation.numAnims);
 	}
 
-	destroy(device: GfxDevice): void {
-		for (const mesh of this.meshes)
-			mesh.destroy(device);
+	generateAnimTexture(cache : Cache, index : number){
+		if (this.animTextures[index])
+			return; // already generated
+		const animation = this.animationData;
+		const numBones = animation.numBones;
+		const anim = animation.anims[index];
+		const numFrames = Math.ceil(anim.endTime * Settings.AnimationTextureFps);
+		
+		const width = numBones * 3; // one mat4x3 per bone
+		const height = numFrames;
+
+		const bbox = anim.aabb;
+		bbox.reset();
+		const scratchAABB = new AABB();
+
+		const stride = width * 4;
+		const pixels = new Float32Array(stride * height);
+
+		const transforms  = new Array<mat4>(numBones);
+		for (let i = 0; i < numBones; ++i)
+			transforms[i] = mat4.create();
+
+		for (let row = 0; row < numFrames; ++row){
+			const t = row / Settings.AnimationTextureFps;
+			calculateAnimationTransforms(animation, index, transforms, t);
+			for (let i = 0; i < numBones; ++i){
+				const thisBone = transforms[i];
+				
+				fillMatrix4x3(pixels, row * stride + i * 12, thisBone);
+
+				scratchAABB.transform(animation.boneAABBs[i], thisBone);
+				bbox.union(bbox, scratchAABB);
+			}
+		}
+
+		const texture : Qd3DTexture = {
+			width,
+			height,
+			numTextures : 1,
+			pixelFormat : GfxFormat.F32_RGBA,
+			alpha : AlphaType.Opaque,
+			wrapU : GfxWrapMode.Clamp,
+			wrapV : GfxWrapMode.Clamp,
+			pixels,
+		};
+		this.animTextures[index] = cache.createTextureMapping(texture, "Animation", false, GfxTexFilterMode.Bilinear);
 	}
 };
 
@@ -625,7 +716,7 @@ function mergeMeshes(device : GfxDevice, cache : Cache, entities : Entity[]) : E
 			numTriangles,
 			numVertices,
 			aabb,
-			colour : rawMesh.colour,
+			colour : mesh.colour,
 			texture : rawMesh.texture,
 
 			indices,
@@ -635,7 +726,11 @@ function mergeMeshes(device : GfxDevice, cache : Cache, entities : Entity[]) : E
 			vertexColours,
 		};
 
-		return new StaticObject(device, cache, mergedMesh, "Merged mesh");
+		const result = new StaticObject(device, cache, mergedMesh, "Merged mesh");
+		result.renderFlags = mesh.renderFlags;
+		result.renderLayerOffset = mesh.renderLayerOffset;
+		result.scrollUVs = mesh.scrollUVs;
+		return result;
 	});
 	return new Entity(newMeshes, [0,0,0], 0, 1, false);
 }
@@ -678,9 +773,24 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
 	initEntities(device : GfxDevice){
 		const staticEntityMap = new Map<StaticObject, Entity[]>();
+
+
 		this.entities = this.entities.filter((e)=>{
-			if (e.update !== undefined || e.isDynamic)
-				return true;
+			if (e.update !== undefined || e.isDynamic){
+
+				// calculate animation textures and bboxes up front
+				const animEntity = e as AnimatedEntity;
+				const animIndex = animEntity.animationController?.currentAnimationIndex;
+				if (animIndex !== undefined){
+					// generate animated entity textures
+					animEntity.animatedObject.generateAnimTexture(this.cache, animIndex);
+					e.aabb.transform(e.baseAABB, e.modelMatrix);
+				}
+				
+
+				return true; // not a static entity, keep it in the main entity list
+			}
+			// else this is a static entity, see if we can merge it
 
 			const mesh = e.meshes[0];
 			const set = staticEntityMap.get(mesh);
@@ -691,8 +801,10 @@ export class SceneRenderer implements Viewer.SceneGfx{
 				staticEntityMap.set(mesh, [e]);
 			return false;
 		});
+
+		// merge static entities
 		staticEntityMap.forEach((entities, firstMesh)=>{
-			if (entities.length <= MeshMergeThreshold){
+			if (entities.length <= Settings.MeshMergeThreshold){
 				// never mind, put them back
 				this.entities.push(...entities);
 				staticEntityMap.delete(firstMesh);
@@ -702,7 +814,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 				this.entities.push(mergeMeshes(device, this.cache, entities));
 			}
 		});
-		
+
 		// done generating models, done with these caches
 		this.cache.sourceModels.clear();
 		this.cache.textureFromSourceCache.clear();

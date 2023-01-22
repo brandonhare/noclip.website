@@ -1,6 +1,7 @@
-import { mat4, quat, vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { Endianness } from "../endian";
-import { clamp, invlerp, lerp, quatFromEulerRadians } from "../MathHelpers";
+import { AABB } from "../Geometry";
+import { clamp, computeModelMatrixSRT, invlerp, lerp } from "../MathHelpers";
 import { assert, readString } from "../util";
 
 import { ResourceFork } from "./AppleDouble";
@@ -18,6 +19,7 @@ export type AnimationData = {
 	numAnims : number,
 	//bones : Bone[],
 	boneParentIDs : number[],
+	boneAABBs : AABB[],
 	//relativePointOffsets : Float32Array,
 	//decomposedPointList : PointRef[],
 	//decomposedNormalList : vec3[],
@@ -48,6 +50,7 @@ export type Anim = {
 	endTime : number,
 	loopMode : AnimLoopMode,
 	loopStartTime : number,
+	aabb : AABB,
 };
 
 
@@ -147,7 +150,11 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 	assert(relativePointOffsets !== undefined);
 	assert(relativePointOffsets.length === numDecomposedPoints * 3);
 
-	const boneParentIDs : number[] = new Array(numJoints);
+	const scratchVec : vec3 = [0,0,0];
+	const fullAabb = new AABB();
+
+	const boneParentIDs = new Array<number>(numJoints);
+	const boneAABBs = new Array<AABB>(numJoints);
 	for (let boneIndex = 0; boneIndex < numJoints; ++boneIndex){
 		const bone = skeletonData.get("Bone")?.get(1000 + boneIndex);
 		assert(bone !== undefined);
@@ -185,6 +192,9 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 		};
 		*/
 
+		const aabb = new AABB();
+		boneAABBs[boneIndex] = aabb;
+
 		// update mesh offsets and fill out bone attribute array
 		for (const pointId of pointList){
 			const point = decomposedPointList[pointId];
@@ -198,11 +208,16 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 
 				mesh.boneIds![pointIndex] = boneIndex;
 				
-				mesh.vertices[pointIndex * 3    ] = relativePointOffsets[pointId * 3];
-				mesh.vertices[pointIndex * 3 + 1] = relativePointOffsets[pointId * 3 + 1];
-				mesh.vertices[pointIndex * 3 + 2] = relativePointOffsets[pointId * 3 + 2];
+				for (let i = 0; i < 3; ++i){
+					const p = relativePointOffsets[pointId * 3 + i];
+					mesh.vertices[pointIndex * 3 + i] = p
+					scratchVec[i] = p;
+				}
+
+				aabb.unionPoint(scratchVec);
 			}
 		}
+		fullAabb.union(fullAabb, aabb);
 	}
 
 	const enum AnimEventType {
@@ -290,6 +305,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 			endTime,
 			loopMode,
 			loopStartTime,
+			aabb : fullAabb.clone(), // approx
 		};
 		
 	}
@@ -300,9 +316,7 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 			numBones : numJoints,
 			numAnims,
 			boneParentIDs,
-			//relativePointOffsets,
-			//decomposedPointList,
-			//decomposedNormalList,
+			boneAABBs,
 			anims,
 		},
 	};
@@ -312,9 +326,8 @@ export function parseSkeleton(modelGroup : Qd3DMesh[][], skeletonData : Resource
 
 export class AnimationController {
 	animation : AnimationData;
-	boneTransforms : mat4[];
 
-	currentAnimation = 0;
+	currentAnimationIndex = 0;
 	t = 0;
 	animSpeed = 1;
 	animDirection = 1; // 1 or -1
@@ -322,14 +335,11 @@ export class AnimationController {
 
 	constructor(animation : AnimationData){
 		this.animation = animation;
-		this.boneTransforms = new Array(animation.numBones);
-		for (let i = 0; i < animation.numBones; ++i)
-			this.boneTransforms[i] = mat4.create();
 	}
 
 	setAnimation(index : number, speed : number){
 		assert(index >= 0 && index < this.animation.numAnims, "animation out of range");
-		this.currentAnimation = index;
+		this.currentAnimationIndex = index;
 		this.t = 0;
 		this.animSpeed = speed;
 		this.animDirection = 1;
@@ -337,19 +347,19 @@ export class AnimationController {
 	}
 
 	setRandomTime(){
-		const anim = this.animation.anims[this.currentAnimation];
+		const anim = this.animation.anims[this.currentAnimationIndex];
 		this.t = lerp(anim.loopStartTime, anim.endTime, Math.random());
 		if (anim.loopMode === AnimLoopMode.ZigZag && Math.random() >= 0.5)
 			this.animDirection = -1;
 	}
 
-	update(dt : number){
+	updateTime(dt : number){
 		if (!this.running){
 			return;
 		}
 
 		this.t += dt * this.animSpeed * this.animDirection;
-		const anim = this.animation.anims[this.currentAnimation];
+		const anim = this.animation.anims[this.currentAnimationIndex];
 
 		// apply looping
 		if (this.animDirection > 0){ // forward
@@ -387,50 +397,65 @@ export class AnimationController {
 				}
 			}
 		}
-
-		// apply keyframes
-		const rot : quat = [0,0,0,0];
-		for (let boneIndex = 0; boneIndex < this.animation.numBones; ++boneIndex){
-			const myKeyframes = anim.keyframes[boneIndex];
-			const myBoneMatrix = this.boneTransforms[boneIndex];
-			if (myKeyframes.length === 0){
-				continue;
-			}
-
-
-			let currentKeyframe = myKeyframes[myKeyframes.length - 1];
-			for (let i = 0; i < myKeyframes.length; ++i){
-				const keyframe = myKeyframes[i];
-				if (keyframe.tick >= this.t){
-					if (i > 0)
-						currentKeyframe = interpolateKeyframe(keyframe, myKeyframes[i-1], this.t);
-					else
-						currentKeyframe = keyframe;
-					break;
-				}
-			}
-
-			quatFromEulerRadians(rot, currentKeyframe.rotation[0], currentKeyframe.rotation[1], currentKeyframe.rotation[2]);
-			mat4.fromRotationTranslationScale(
-				myBoneMatrix,
-				rot,
-				currentKeyframe.coord,
-				currentKeyframe.scale
-			);
-		
-			const parentIndex = this.animation.boneParentIDs[boneIndex];
-			if (parentIndex >= 0)
-				mat4.mul(myBoneMatrix, this.boneTransforms[parentIndex], myBoneMatrix);
-
-		}
 	}
 }
 
+const scratchMat4 = mat4.create();
+
+export function calculateSingleAnimationTransform(target : mat4, animation : AnimationData, animIndex : number, boneIndex : number, t : number, recursive = true) : mat4{
+	const anim = animation.anims[animIndex];
+	const myKeyframes = anim.keyframes[boneIndex];
+
+	if (myKeyframes.length === 0)
+		return target;
+
+	let myMatrix = target;
+	const parentIndex = animation.boneParentIDs[boneIndex];
+	if (recursive && parentIndex >= 0){
+		calculateSingleAnimationTransform(target, animation, animIndex, parentIndex, t, true);
+		myMatrix = scratchMat4;
+	}
+
+	let currentKeyframe = myKeyframes[myKeyframes.length - 1];
+	for (let i = 0; i < myKeyframes.length; ++i){
+		const keyframe = myKeyframes[i];
+		if (keyframe.tick >= t){
+			if (i > 0)
+				currentKeyframe = interpolateKeyframe(keyframe, myKeyframes[i-1], t);
+			else
+				currentKeyframe = keyframe;
+			break;
+		}
+	}
+
+	computeModelMatrixSRT(myMatrix, currentKeyframe.scale[0], currentKeyframe.scale[1], currentKeyframe.scale[2], currentKeyframe.rotation[0], currentKeyframe.rotation[1], currentKeyframe.rotation[2], currentKeyframe.coord[0], currentKeyframe.coord[1], currentKeyframe.coord[2]);
+
+	if (myMatrix !== target){
+		mat4.mul(target, target, myMatrix);
+	}
+
+	return target;
+}
+
+export function calculateAnimationTransforms(animation : AnimationData, animIndex : number, transforms : mat4[], t : number){
+
+	const numBones = Math.min(animation.numBones, transforms.length);
+
+	for (let boneIndex = 0; boneIndex < numBones; ++boneIndex){
+		
+		calculateSingleAnimationTransform(transforms[boneIndex], animation, animIndex, boneIndex, t, false);
+	
+		const parentIndex = animation.boneParentIDs[boneIndex];
+		if (parentIndex >= 0)
+			mat4.mul(transforms[boneIndex], transforms[parentIndex], transforms[boneIndex]);
+	}
+}
 
 function accelerationCurve(t : number) : number{
 	return t * t * (3 - 2 * t);
 }
-const dummyKeyframe : AnimKeyframe = {
+
+const scratchKeyframe : AnimKeyframe = {
 	tick : 0, // unused
 	accelerationMode : AccelerationMode.Linear, // unused
 	coord : [0,0,0],
@@ -452,9 +477,9 @@ function interpolateKeyframe(from : AnimKeyframe, to : AnimKeyframe, t : number)
 			break;
 	}
 
-	vec3.lerp(dummyKeyframe.coord, from.coord, to.coord, t1);
-	vec3.lerp(dummyKeyframe.rotation, from.rotation, to.rotation, t1);
-	vec3.lerp(dummyKeyframe.scale, from.scale, to.scale, t1);
+	vec3.lerp(scratchKeyframe.coord, from.coord, to.coord, t1);
+	vec3.lerp(scratchKeyframe.rotation, from.rotation, to.rotation, t1);
+	vec3.lerp(scratchKeyframe.scale, from.scale, to.scale, t1);
 	
-	return dummyKeyframe;
+	return scratchKeyframe;
 }

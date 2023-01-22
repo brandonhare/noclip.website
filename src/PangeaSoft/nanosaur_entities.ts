@@ -379,7 +379,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		
 				if (this.rock){
 					vec3.set(this.rock.position, 10, -10, 80);
-					vec3.transformMat4(this.rock.position, this.rock.position, this.animationController.boneTransforms[3]);
+					vec3.transformMat4(this.rock.position, this.rock.position, this.getBoneTransform(3));
 					vec3.transformMat4(this.rock.position, this.rock.position, this.modelMatrix);
 					this.rock.updateMatrix();
 				}

@@ -1,9 +1,9 @@
-import { mat4, quat, vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { lerp, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedEntity, Assets, Entity, EntityUpdateResult, FriendlyNames, LevelObjectDef } from "./entity";
-import { AnimatedObject, RenderFlags, StaticObject } from "./renderer";
+import { AnimatedEntity, Assets, Entity, FriendlyNames, LevelObjectDef } from "./entity";
+import { AnimatedObject, StaticObject } from "./renderer";
 import { TerrainInfo } from "./terrain";
 
 export type BugdomProcessedAssets = Assets<StaticObject, AnimatedObject, StaticObject[], TerrainInfo[]>
@@ -179,7 +179,7 @@ class AntEntity extends AnimatedEntity {
 		if (this.spear){
 			mat4.identity(this.spear.modelMatrix);
 			mat4.mul(this.spear.modelMatrix, this.spear.modelMatrix, this.modelMatrix);
-			mat4.mul(this.spear.modelMatrix, this.spear.modelMatrix, this.animationController.boneTransforms[4]);
+			mat4.mul(this.spear.modelMatrix, this.spear.modelMatrix, this.getBoneTransform(4));
 			mat4.translate(this.spear.modelMatrix, this.spear.modelMatrix, [21, -80, -33]);
 			mat4.scale(this.spear.modelMatrix, this.spear.modelMatrix, this.spear.scale);
 		}

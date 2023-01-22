@@ -1,7 +1,6 @@
 import * as Viewer from '../viewer';
 
 import { mat4, vec3 } from "gl-matrix";
-import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 import { AABB, Frustum } from "../Geometry";
 import { GfxColor, GfxDevice } from "../gfx/platform/GfxPlatform";
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
@@ -9,7 +8,7 @@ import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
 import { AnimatedObject, Cache, StaticObject } from "./renderer";
-import { AnimationController } from "./skeleton";
+import { AnimationController, calculateSingleAnimationTransform } from "./skeleton";
 import { TerrainInfo } from "./terrain";
 
 
@@ -65,7 +64,8 @@ export class Entity {
 	rotZ = 0;
 	scale: vec3;
 	modelMatrix : mat4 = mat4.create();
-	aabb : AABB = new AABB();
+	baseAABB : AABB = new AABB(); // before modelMatrix transform
+	aabb : AABB = new AABB(); // after modelMatrix transform
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	alwaysUpdate = false;
 	isDynamic = false;
@@ -76,6 +76,9 @@ export class Entity {
 			meshes = [meshes];
 		}
 		this.meshes = meshes;
+
+		for (const mesh of this.meshes)
+			this.baseAABB.union(this.baseAABB, mesh.aabb);
 
 		if (rotation === null)
 			rotation = Math.random() * MathConstants.TAU;
@@ -102,11 +105,7 @@ export class Entity {
 			this.rotX, this.rotation, this.rotZ,
 			this.position[0], this.position[1], this.position[2]);
 
-		this.aabb.reset();
-		for (const mesh of this.meshes){
-			this.aabb.union(this.aabb, mesh.aabb);
-		}
-		this.aabb.transform(this.aabb, this.modelMatrix);
+		this.aabb.transform(this.baseAABB, this.modelMatrix);
 	}
 
 	checkVisible(frustum : Frustum){
@@ -124,43 +123,31 @@ export class Entity {
 
 export class AnimatedEntity extends Entity{
 	animationController : AnimationController;
+	animatedObject : AnimatedObject;
 
-	constructor(mesh : AnimatedObject, position : vec3, rotation : number | null, scale : number, startAnim : number, pushUp : boolean = false){
-		super(mesh.meshes, position, rotation, scale, pushUp);
-		this.animationController = new AnimationController(mesh.animationData);
-		this.animationController.currentAnimation = startAnim;
+	constructor(anim : AnimatedObject, position : vec3, rotation : number | null, scale : number, startAnim : number, pushUp : boolean = false){
+		super(anim.meshes, position, rotation, scale, pushUp);
+
+		this.animatedObject = anim;
+		this.animationController = new AnimationController(anim.animationData);
+		this.setAnimation(startAnim, 1);
 		this.animationController.setRandomTime();
 	}
 
 	override update(dt : number) : void {
-		this.animationController.update(dt);
-		// todo: update bbox?
+		this.animationController.updateTime(dt);
 	}
 
 	setAnimation(animationIndex : number, animationSpeed : number){
 		this.animationController.setAnimation(animationIndex, animationSpeed);
+
+		// todo: may not exist if the animation hasn't been set up yet
+		this.baseAABB = this.animationController.animation.anims[animationIndex].aabb;
+		this.aabb.transform(this.baseAABB, this.modelMatrix);
 	}
 
-	debugDrawSkeleton(clipFromWorldMatrix : mat4){
-		
-		const boneParentIDs = this.animationController.animation.boneParentIDs;
-		const transforms = this.animationController.boneTransforms;
-		const c = getDebugOverlayCanvas2D();
-		const p1 : vec3 = [0,0,0];
-		const p2 : vec3 = [0,0,0];
-
-		for (let i = 0; i < boneParentIDs.length; ++i){
-			const parentIndex = boneParentIDs[i];
-			if (parentIndex < 0)
-				continue;
-			
-			mat4.getTranslation(p1, transforms[i]);
-			vec3.transformMat4(p1, p1, this.modelMatrix);
-
-			mat4.getTranslation(p2, transforms[parentIndex]);
-			vec3.transformMat4(p2, p2, this.modelMatrix);
-
-			drawWorldSpaceLine(c, clipFromWorldMatrix, p1, p2);
-		}
+	static scratchTransform  = mat4.create();
+	getBoneTransform(boneIndex : number) : mat4{
+		return calculateSingleAnimationTransform(AnimatedEntity.scratchTransform, this.animationController.animation, this.animationController.currentAnimationIndex, boneIndex, this.animationController.t);
 	}
 }

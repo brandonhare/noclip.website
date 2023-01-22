@@ -1,8 +1,7 @@
-import { mat4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
-import { GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxTexFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { assert } from "../util";
 
@@ -125,9 +124,10 @@ export function parseTerrain(terrainBuffer: ArrayBufferSlice, pixelBuffer: Array
 		height: 32,
 		numTextures,
 		pixelFormat: GfxFormat.U16_RGBA_5551,
+		filterMode : GfxTexFilterMode.Point,
 		alpha: AlphaType.Opaque,
-		wrapU: GfxWrapMode.Mirror,
-		wrapV: GfxWrapMode.Mirror,
+		wrapU: GfxWrapMode.Clamp,
+		wrapV: GfxWrapMode.Clamp,
 		pixels: terrainPixels,
 	};
 

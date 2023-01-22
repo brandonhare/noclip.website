@@ -1,10 +1,9 @@
 // http://justsolve.archiveteam.org/wiki/3DMF
 
-import { ReadonlyMat4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
-import { GfxColor, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxColor, GfxTexFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { assert, readString } from "../util";
 
@@ -34,10 +33,11 @@ export type Qd3DTexture = {
 	height : number;
 	numTextures : number; // > 1 for array textures
 	pixelFormat : GfxFormat; // commonly GfxFormat.U16_RGBA_5551;
+	filterMode? : GfxTexFilterMode;
 	alpha : AlphaType;
 	wrapU : GfxWrapMode;
 	wrapV : GfxWrapMode;
-	pixels: Uint16Array | Uint8Array;
+	pixels: Float32Array | Uint16Array | Uint8Array;
 };
 
 // converts U16_RGBA_1555 pixels to U16_RGBA_5551
