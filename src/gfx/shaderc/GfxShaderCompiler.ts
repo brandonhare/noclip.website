@@ -37,8 +37,8 @@ function getSeparateSamplerTypes(combinedSamplerType: string): [string, string] 
 export function preprocessShader_GLSL(vendorInfo: GfxVendorInfo, type: 'vert' | 'frag', source: string, defines: DefineMap | null = null): string {
     // Garbage WebGL2 shader compiler until I get something better down the line...
     const lines = source.split('\n').map((n) => {
-        // Remove comments.
-        return n.replace(/\s*[/][/].*$/, '');
+        // Remove comments and trim whitespace.
+        return n.replace(/\s*[/][/].*$/, '').trim();
     }).filter((n) => {
         // Filter whitespace.
         const isEmpty = !n || /^\s+$/.test(n);
