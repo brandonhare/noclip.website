@@ -1,15 +1,16 @@
-import { vec3, vec4 } from "gl-matrix";
-import { colorMult, colorScale } from "../Color";
-import { GfxDevice } from "../gfx/platform/GfxPlatform";
-import { SceneContext } from "../SceneBase";
 import * as Viewer from '../viewer';
 
+import { vec4 } from "gl-matrix";
+import { colorScale } from "../Color";
+import { GfxDevice } from "../gfx/platform/GfxPlatform";
+import { SceneContext } from "../SceneBase";
+
 import { parseAppleDouble } from "./AppleDouble";
-import { BugdomLevelType, BugdomModelFriendlyNames, ModelSetNames, BugdomProcessedAssets, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
+import { BugdomLevelType, BugdomModelFriendlyNames, BugdomProcessedAssets, ModelSetNames, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
 import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
 import { parseQd3DMeshGroup, Qd3DMesh } from "./QuickDraw3D";
-import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
+import { AnimatedObject, Cache, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
 
 const pathBase = "bugdom";
@@ -28,6 +29,7 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		this.createModels(device, this.cache, assets);
 		this.processedAssets.levelType = levelType;
 
+		// create terrain entities
 		for (let i = 0; i < this.processedAssets.terrain.length; ++i){
 			const terrainMesh = this.processedAssets.terrain[i];
 			const terrainInfo = this.processedAssets.terrainInfo![i];
@@ -39,6 +41,7 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			this.entities.push(terrainEntity);
 		}
 
+		// create entities
 		for (const objectDef of objectList){
 			const entity = spawnBugdomEntity(objectDef, this.processedAssets);
 			if (entity){
@@ -48,6 +51,9 @@ export class BugdomSceneRenderer extends SceneRenderer {
 					this.entities.push(entity);
 			}
 		}
+
+		// finish up
+		this.initEntities(device);
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : BugdomRawAssets){

@@ -1,4 +1,7 @@
-import { mat4, ReadonlyMat4, vec2, vec3, vec4 } from "gl-matrix";
+import * as UI from "../ui";
+import * as Viewer from '../viewer';
+
+import { mat4, vec2, vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { computeViewSpaceDepthFromWorldSpacePoint } from "../Camera";
 import { AABB } from "../Geometry";
@@ -15,17 +18,18 @@ import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
 import { GfxRendererLayer, GfxRenderInstManager, makeSortKey, setSortKeyDepth } from "../gfx/render/GfxRenderInstManager";
-import { Vec3UnitY, Vec3Zero } from "../MathHelpers";
+import { computeNormalMatrix, Vec3UnitY, Vec3Zero } from "../MathHelpers";
 import { DeviceProgram } from "../Program";
 import { Destroyable, SceneContext } from "../SceneBase";
 import { TextureMapping } from "../TextureHolder";
-import * as UI from "../ui";
-import { assert } from "../util";
-import * as Viewer from '../viewer';
+import { assert, assertExists } from "../util";
 
 import { AnimatedEntity, Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
 import { AnimationData, SkeletalMesh } from "./skeleton";
+
+// Settings
+const MeshMergeThreshold = 10;
 
 
 export const enum RenderFlags {
@@ -219,13 +223,13 @@ void main(){
 
 
 export class Cache extends GfxRenderCache implements UI.TextureListHolder {
-	textures = new WeakMap<Qd3DTexture, GfxTexture>();
+	textureFromSourceCache = new Map<Qd3DTexture, GfxTexture>();
+	sourceModels = new Map<StaticObject, Qd3DMesh>();
 
 	allModels : StaticObject[] = [];
 	allTextures : GfxTexture[] = [];
 
 	programs = new Map<RenderFlags, GfxProgram>();
-	//programIds = new WeakMap<GfxProgram, number>();
 
 	numLights = 1;
 
@@ -243,7 +247,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	}
 
 	createTexture(texture : Qd3DTexture, name : string){
-		let result = this.textures.get(texture);
+		let result = this.textureFromSourceCache.get(texture);
 		if (result === undefined){
 			result = this.device.createTexture({
 				depth : texture.numTextures,
@@ -254,7 +258,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 				usage: GfxTextureUsage.Sampled,
 				numLevels : 1
 			});
-			this.textures.set(texture, result);
+			this.textureFromSourceCache.set(texture, result);
 			this.allTextures.push(result);
 			this.device.uploadTextureData(result, 0, [texture.pixels]);
 
@@ -291,13 +295,10 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		return mapping;
 	}
 
-	addModel(model : StaticObject | StaticObject[] | StaticObject[][]){
-		if (Array.isArray(model)){
-			for (const m of model)
-				this.addModel(m)
-			return;
-		}
+	addModel(model : StaticObject, sourceMesh? : Qd3DMesh){
 		this.allModels.push(model);
+		if (sourceMesh)
+			this.sourceModels.set(model, sourceMesh);
 	}
 
 	public override destroy(): void {
@@ -333,7 +334,7 @@ export class StaticObject implements Destroyable {
 		this.aabb = mesh.aabb;
 		this.colour = mesh.colour;
 
-		cache.addModel(this);
+		cache.addModel(this, mesh);
 
 		const vertexBufferDescriptors : GfxVertexBufferDescriptor[] = [];
 		const vertexLayoutDescriptors : GfxInputLayoutBufferDescriptor[] = [];
@@ -557,6 +558,87 @@ export class AnimatedObject implements Destroyable{
 };
 
 
+function mergeMeshes(device : GfxDevice, cache : Cache, entities : Entity[]) : Entity {
+
+	const pos : vec3 = [0,0,0];
+	const norm : vec4 = [0,0,0,0];
+	const normalTransform = mat4.create();
+
+	const newMeshes = entities[0].meshes.map((mesh)=>{
+		const rawMesh = assertExists(cache.sourceModels.get(mesh), "missing source mesh");
+
+		const count = entities.length;
+		const numVertices = rawMesh.numVertices * count;
+		const numTriangles = rawMesh.numTriangles * count;
+		const numIndices = numTriangles * 3;
+
+		const indexStride = rawMesh.numTriangles * 3;
+		const vertexStride = rawMesh.numVertices * 3;
+		const uvStride = rawMesh.numVertices * 2;
+		
+
+		const aabb = new AABB();
+		const indices = (numVertices <= 0x10000) ? new Uint16Array(numIndices) : new Uint32Array(numIndices);
+		const vertices = new Float32Array(numVertices*3);
+		const UVs = rawMesh.UVs ? new Float32Array(numVertices*2) : undefined;
+		const normals = rawMesh.normals ? new Float32Array(numVertices*3) : undefined;
+		const vertexColours = rawMesh.vertexColours ? (
+			rawMesh.vertexColours.BYTES_PER_ELEMENT === 1 ? new Uint8Array(numVertices * 3) : new Float32Array(numVertices * 3)
+		) : undefined;
+		assert(!rawMesh.tilemapIds && !rawMesh.boneIds, "cannot merge tilemaps or bones");
+
+		for (let i = 0; i < count; ++i){
+
+			UVs?.set(rawMesh.UVs!, uvStride * i);
+			vertexColours?.set(rawMesh.vertexColours!, vertexStride * i);
+
+			// merge indices
+			for (let j = 0; j < indexStride; ++j)
+				indices[indexStride * i + j] = rawMesh.indices[j] + rawMesh.numVertices * i;
+
+			// merge verts
+			const transform = entities[i].modelMatrix;
+			for (let j = 0; j < vertexStride; j += 3){
+				for (let k = 0; k < 3; ++k)
+					pos[k] = rawMesh.vertices[j+k];
+				vec3.transformMat4(pos, pos, transform);
+				aabb.unionPoint(pos);
+				for (let k = 0; k < 3; ++k)
+					vertices[i*vertexStride+j+k] = pos[k];
+			}
+			
+			if (normals){
+				// merge normals
+				computeNormalMatrix(normalTransform, transform);
+				for (let j = 0; j < vertexStride; j += 3){
+					for (let k = 0; k < 3; ++k)
+						norm[k] = rawMesh.normals![j+k];
+					vec4.transformMat4(norm, norm, normalTransform);
+					vec4.normalize(norm, norm);
+					for (let k = 0; k < 3; ++k)
+						normals[i*vertexStride+j+k] = norm[k];
+				}
+			}
+		}
+
+		const mergedMesh : Qd3DMesh = {
+			numTriangles,
+			numVertices,
+			aabb,
+			colour : rawMesh.colour,
+			texture : rawMesh.texture,
+
+			indices,
+			vertices,
+			UVs,
+			normals,
+			vertexColours,
+		};
+
+		return new StaticObject(device, cache, mergedMesh, "Merged mesh");
+	});
+	return new Entity(newMeshes, [0,0,0], 0, 1, false);
+}
 
 
 export type SceneSettings = {
@@ -592,6 +674,38 @@ export class SceneRenderer implements Viewer.SceneGfx{
 	getDefaultWorldMatrix(out : mat4){
 		if (this.sceneSettings.cameraPos)
 			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
+	}
+
+	initEntities(device : GfxDevice){
+		const staticEntityMap = new Map<StaticObject, Entity[]>();
+		this.entities = this.entities.filter((e)=>{
+			if (e.update !== undefined || e.isDynamic)
+				return true;
+
+			const mesh = e.meshes[0];
+			const set = staticEntityMap.get(mesh);
+			if (set){
+				// assert(set.every((e2)=>e2.meshes === e.meshes), "entity mesh mismatch!");
+				set.push(e);
+			} else 
+				staticEntityMap.set(mesh, [e]);
+			return false;
+		});
+		staticEntityMap.forEach((entities, firstMesh)=>{
+			if (entities.length <= MeshMergeThreshold){
+				// never mind, put them back
+				this.entities.push(...entities);
+				staticEntityMap.delete(firstMesh);
+				return;
+			} else {
+				// todo: split into area-based batches
+				this.entities.push(mergeMeshes(device, this.cache, entities));
+			}
+		});
+		
+		// done generating models, done with these caches
+		this.cache.sourceModels.clear();
+		this.cache.textureFromSourceCache.clear();
 	}
 
 	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput){
@@ -636,16 +750,18 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			if (!visible && !entity.alwaysUpdate)
 				continue;
 
-			const result : EntityUpdateResult = entity.update(dt);
-			if (result === false){
-				// destroy this entity
-				this.entities.splice(i, 1);
-				--i;
-				continue;
-			}
-			if (result){
-				// created new entity
-				this.entities.push(result);
+			if (entity.update){
+				const result : EntityUpdateResult = entity.update(dt);
+				if (result === false){
+					// destroy this entity
+					this.entities.splice(i, 1);
+					--i;
+					continue;
+				}
+				if (result){
+					// created new entity
+					this.entities.push(result);
+				}
 			}
 
 			if (visible)

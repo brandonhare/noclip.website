@@ -1,15 +1,14 @@
 import * as Viewer from '../viewer';
 
-import { mat4, vec2, vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import { drawWorldSpaceLine, getDebugOverlayCanvas2D } from "../DebugJunk";
 import { AABB, Frustum } from "../Geometry";
-import { fillMatrix4x3 } from "../gfx/helpers/UniformBufferHelpers";
 import { GfxColor, GfxDevice } from "../gfx/platform/GfxPlatform";
 import { GfxRenderInstManager } from "../gfx/render/GfxRenderInstManager";
 import { computeModelMatrixSRT, MathConstants } from "../MathHelpers";
 import { assert } from "../util";
 
-import { AnimatedObject, Cache, Program, RenderFlags, StaticObject } from "./renderer";
+import { AnimatedObject, Cache, StaticObject } from "./renderer";
 import { AnimationController } from "./skeleton";
 import { TerrainInfo } from "./terrain";
 
@@ -69,6 +68,7 @@ export class Entity {
 	aabb : AABB = new AABB();
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	alwaysUpdate = false;
+	isDynamic = false;
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
@@ -118,7 +118,7 @@ export class Entity {
 			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 	}
 	
-	update(dt : number) : EntityUpdateResult {}
+	update?(dt : number) : EntityUpdateResult;
 }
 
 

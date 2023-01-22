@@ -393,10 +393,12 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		ptera.startY = def.y;
 		ptera.animationController.animSpeed = Math.random() * 0.5 + 1;
 		const shadow = new ShadowEntity(assets.terrainInfo, assets.models.Global_Models[1], ptera, def.y, 4, 4.5);
+		shadow.isDynamic = true;
 		ptera.shadow = shadow;
 		const results : Entity[] = [ptera, shadow];
 		if (hasRock) {
 			const rock = new Entity(assets.models.Level1_Models[9], [def.x, def.y, def.z], 0, 0.4, false);
+			rock.isDynamic = true;
 			ptera.rock = rock;
 			results.push(rock);
 		}

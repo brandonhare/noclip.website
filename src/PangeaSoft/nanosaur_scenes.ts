@@ -1,20 +1,20 @@
 import * as Viewer from '../viewer';
+
 import { DataFetcher } from "../DataFetcher";
 import { GfxDevice, GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { MathConstants } from "../MathHelpers";
 import { SceneContext } from "../SceneBase";
 import { assert } from "../util";
+import { vec4 } from "gl-matrix";
 
 import { parseAppleDouble } from "./AppleDouble";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
-import { entityCreationFunctions, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, ObjectType, NanosaurProcessedAssets, SkeletonNames, initNanosaurMeshRenderSettings } from "./nanosaur_entities";
+import { entityCreationFunctions, initNanosaurMeshRenderSettings, invalidEntityType, ModelSetNames, NanosaurModelFriendlyNames, NanosaurProcessedAssets, ObjectType, SkeletonNames } from "./nanosaur_entities";
 import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
-import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
+import { AnimatedObject, Cache, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
 import { loadTextureFromTGA } from "./TGA";
-import { vec4 } from "gl-matrix";
-import { TerrainInfo } from "./terrain";
 
 const pathBase = "nanosaur";
 
@@ -31,6 +31,7 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 
 		this.createModels(device, this.cache, assets);
 
+		// create terrain
 		if (this.processedAssets.terrain){
 			const info = this.processedAssets.terrainInfo!;
 			const terrainEntity = new Entity(this.processedAssets.terrain, [0,0,0],0,1,false);
@@ -41,6 +42,7 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			this.entities.push(terrainEntity);
 		}
 
+		// create entities
 		for (const objectDef of objectList){
 			const entity = (entityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, this.processedAssets);
 			if (entity){
@@ -50,6 +52,9 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 					this.entities.push(entity);
 			}
 		}
+	
+		// finish up
+		this.initEntities(device);
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : NanosaurRawAssets){
