@@ -29,7 +29,7 @@ import { AnimationData, SkeletalMesh } from "./skeleton";
 
 
 export const enum RenderFlags {
-	Translucent		 = 0x400,
+	Translucent		 = 0x400, // must be the highest value
 	Skinned			 = 0x200,
 	Reflective       = 0x100,
 	DrawBackfacesSeparately = 0x80,
@@ -242,23 +242,52 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	allModels : StaticObject[] = [];
 	allTextures : GfxTexture[] = [];
 
-	programs = new Map<RenderFlags, GfxProgram>();
-	//programIds = new WeakMap<GfxProgram, number>();
+	singlePrograms = new Map<RenderFlags, GfxProgram>();
+	instancedPrograms = new Map<RenderFlags, GfxProgram>();
+	instanceCounts = new Map<RenderFlags, number>();
 
 	numLights = 1;
 	maxBones = 0;
-	maxInstances = 1;
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
 
-	getProgram(renderFlags : RenderFlags){
-		let program = this.programs.get(renderFlags);
-		if (program) return program;
-		program = this.createProgram(new Program(renderFlags, this.numLights, this.maxBones, this.maxInstances));
-		//if (!this.programIds.has(program))
-		//	this.programIds.set(program, this.programs.size);
-		this.programs.set(renderFlags, program);
+	
+	getNumInstances(renderFlags: RenderFlags | StaticObject[], numInstances : number){
+		if (numInstances === 1)
+			return 1;
+
+		if (typeof(renderFlags) !== "number"){
+			let max = 0;
+			for (const mesh of renderFlags)
+				max = Math.max(max, this.getNumInstances(mesh.renderFlags, numInstances));
+			return max;
+		}
+		
+		let prevCount = this.instanceCounts.get(renderFlags) ?? 0;
+		if (numInstances <= prevCount)
+			return prevCount;
+		
+		console.log(`updating num instances for flags ${renderFlags} from ${prevCount} to ${numInstances}`);
+		this.instancedPrograms.delete(renderFlags); // todo: dont leak program
+		this.instanceCounts.set(renderFlags, numInstances);
+		return numInstances;
+	}
+
+	getProgram(renderFlags : RenderFlags, numInstances : number){
+		let programs : Map<RenderFlags, GfxProgram>;
+		if (numInstances === 1){
+			programs = this.singlePrograms;
+		} else {
+			programs = this.instancedPrograms;
+			numInstances = this.getNumInstances(renderFlags, numInstances);
+		}
+
+		let program = programs.get(renderFlags);
+		if (program)
+			return program;
+		program = this.createProgram(new Program(renderFlags, this.numLights, this.maxBones, numInstances));
+		programs.set(renderFlags, program);
 		return program;
 	}
 
@@ -348,7 +377,7 @@ export class StaticObject implements Destroyable {
 	textureMapping : TextureMapping[] = [];
 	renderLayerOffset = 0;
 
-	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
+	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, public name : string){
 		this.indexCount = mesh.numTriangles * 3;
 		this.aabb = mesh.aabb;
 		this.colour = mesh.colour;
@@ -448,7 +477,7 @@ export class StaticObject implements Destroyable {
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
 
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entity : Entity, flipBackfaces = false): void {
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, entityOrCount : Entity | number, flipBackfaces = false): void {
         const renderInst = renderInstManager.newRenderInst();
 
 		const renderFlags = this.renderFlags;
@@ -456,7 +485,10 @@ export class StaticObject implements Destroyable {
 
 		const skinned = !!(renderFlags & RenderFlags.Skinned);
 
-		const gfxProgram = cache.getProgram(renderFlags);
+		const instanced = typeof(entityOrCount) === "number";
+
+		const gfxProgram = cache.getProgram(renderFlags, instanced ? entityOrCount : 1);
+
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
@@ -493,8 +525,10 @@ export class StaticObject implements Destroyable {
 			});
 		}
 		
-		
-        renderInst.drawIndexes(this.indexCount);
+		if (instanced)
+			renderInst.drawIndexesInstanced(this.indexCount, entityOrCount);
+		else
+       		renderInst.drawIndexes(this.indexCount);
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
@@ -514,35 +548,28 @@ export class StaticObject implements Destroyable {
 			}
 		}
 
-		// fill instance uniforms
-		{
-			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, 4*3 + 4 + (skinned?4*3*cache.maxBones:0));
-			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
-			
-			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
-			uniformOffset += fillColor(uniformData, uniformOffset, entity.colour);
 
-			if (skinned){
-				const bones = (entity as AnimatedEntity).animationController.boneTransforms;
-				for (const bone of bones)
-					uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
-				uniformOffset += (cache.maxBones - bones.length)*4*3;
-			}
+		if (!instanced){
+			// fill single uniforms
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, 4*3+4+(skinned?4*3*cache.maxBones:0));
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+
+			pushInstUniforms(uniformData, uniformOffset, cache, entityOrCount, skinned);
 		}
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
 		if (translucent)
 			renderLayer |= GfxRendererLayer.TRANSLUCENT;
 
-		renderInst.sortKey = setSortKeyDepth(
-			makeSortKey(renderLayer, gfxProgram.ResourceUniqueId),
-			computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entity.position)
-		);
+		renderInst.sortKey = makeSortKey(renderLayer, gfxProgram.ResourceUniqueId);
+		if (!instanced)
+			renderInst.sortKey = setSortKeyDepth(renderInst.sortKey, computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entityOrCount.position));
 
         renderInstManager.submitRenderInst(renderInst);
 
-		if (drawBackfacesSeparately && !flipBackfaces)
-			this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
+		// todo backfaces
+		//if (drawBackfacesSeparately && !flipBackfaces)
+			//this.prepareToRender(device, renderInstManager, viewerInput, cache, entity, true);
 	}
 
 	destroy(device: GfxDevice): void {
@@ -593,6 +620,86 @@ export class AnimatedObject implements Destroyable{
 
 
 
+type MeshSet = {
+	meshes : StaticObject[],
+	entities : Entity[],
+};
+
+const InvisibleViewDistance = -1e20;
+
+function pushInstUniforms(uniformData : Float32Array, uniformOffset : number, cache : Cache, entity : Entity, skinned : boolean){
+	const startOffset = uniformOffset;
+	uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
+	uniformOffset += fillColor(uniformData, uniformOffset, entity.colour);
+
+	if (skinned){
+		const bones = (entity as AnimatedEntity).animationController.boneTransforms;
+		for (const bone of bones)
+			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, bone);
+		uniformOffset += (cache.maxBones - bones.length)*4*3;
+	}
+	return uniformOffset - startOffset;
+}
+
+function prepareToRenderMeshSet(device : GfxDevice, renderInstManager : GfxRenderInstManager, viewerInput : Viewer.ViewerRenderInput, cache : Cache, set : MeshSet){
+
+	let startIndex = 0;
+	let endIndex : number;
+	if (set.meshes[0].renderFlags & RenderFlags.Translucent) {
+		// sort furthest to closest
+		set.entities.sort((a,b)=>b.viewDistance - a.viewDistance);
+		endIndex = set.entities.findIndex((e)=>e.viewDistance === InvisibleViewDistance);
+		if (endIndex === -1)
+			endIndex = set.entities.length; // all visible
+		else if (endIndex === 0)
+			return; // none visible
+	} else {
+		// sort closest to furthest
+		set.entities.sort((a,b)=>a.viewDistance - b.viewDistance);
+
+		startIndex = set.entities.findIndex((e)=>e.viewDistance !== InvisibleViewDistance);
+		endIndex = set.entities.length;
+		if (startIndex == -1)
+			return; // none visible
+	}
+	let count = endIndex - startIndex;
+
+	if (count == 1){
+		for (const mesh of set.meshes){
+			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, set.entities[startIndex]);
+		}
+		return;
+	}
+
+
+	const skinned = !!(set.meshes[0].renderFlags&RenderFlags.Skinned);
+	const blockSize = 4*3+4+(skinned?4*3*cache.maxBones:0);
+
+	const max = device.queryLimits().uniformBufferMaxPageWordSize;
+	const otherBlocks = (8+4*4 + 4 + 4 + 8*cache.numLights + 1);
+	const count2 = Math.min(count, (max - otherBlocks/4) / (blockSize/4));
+	if (count !== count2) console.log(count, count2);
+	count = count2;
+
+	// set instance uniforms
+	const renderInst = renderInstManager.pushTemplateRenderInst();
+	let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, blockSize*cache.getNumInstances(set.meshes, count));
+	const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+
+	for (let i = startIndex; i < endIndex; ++i){
+		uniformOffset += pushInstUniforms(uniformData, uniformOffset, cache, set.entities[i], skinned);
+	}
+
+	// draw
+	for (const mesh of set.meshes){
+		mesh.prepareToRender(device, renderInstManager, viewerInput, cache, count);
+	}
+
+	renderInstManager.popTemplateRenderInst();
+}
+
+
+
 export type SceneSettings = {
 	clearColour : GfxColor,
 	ambientColour : GfxColor,
@@ -604,11 +711,14 @@ export type SceneSettings = {
 	// todo: fog
 };
 
+
 export class SceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
-    entities: Entity[] = [];
 	cache : Cache;
 	sceneSettings : SceneSettings;
+
+    entities: Entity[] = [];
+	meshSets : MeshSet[] = [];
 
 	textureHolder : UI.TextureListHolder;
 
@@ -626,6 +736,48 @@ export class SceneRenderer implements Viewer.SceneGfx{
 	getDefaultWorldMatrix(out : mat4){
 		if (this.sceneSettings.cameraPos)
 			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
+	}
+
+	initEntities(){
+		const map = new Map<StaticObject, MeshSet>();
+		for (const entity of this.entities){
+
+			const mask = Program.MeshUniformRenderFlags | Program.InstanceUniformRenderFlags;
+			const targetFlags = entity.meshes[0].renderFlags & mask;
+			for (let i = 1; i < entity.meshes.length; ++i){
+				if ((entity.meshes[i].renderFlags & mask) !== targetFlags){
+					assert(false, "todo: mismatched render types");
+					break;
+				}
+			}
+
+			assert(entity.meshes.length > 0, "todo: non-visible entities");
+			const set = map.get(entity.meshes[0]);
+			if (set){
+				assert(set.meshes.length === entity.meshes.length && set.meshes.every((m,index)=>entity.meshes[index] === m), "mismatched meshes");
+				set.entities.push(entity);
+			} else {
+				const set = {
+					meshes : [...entity.meshes],
+					entities : [entity],
+				}
+				map.set(entity.meshes[0], set);
+				this.meshSets.push(set);
+			}
+		}
+
+		// init shader instance counts
+		/*for (const set of this.meshSets){
+			this.cache.getNumInstances(set.meshes, set.entities.length);
+		}
+		console.log("instance counts", this.cache.instanceCounts);
+		*/
+
+		// just a rough sort for fun since per-set meshes can have different settings
+		this.meshSets.sort((a,b)=>
+			a.meshes[0].renderFlags - b.meshes[0].renderFlags
+			// tranlucents is the highest value flag so this will partition them
+		);
 	}
 
 	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput){
@@ -662,29 +814,36 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
         const renderInstManager = this.renderHelper.renderInstManager;
 
+
+		// update entities
 		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
 		for (let i = 0; i < this.entities.length; ++i){
 			const entity = this.entities[i];
-			const visible = entity.checkVisible(viewerInput.camera.frustum);
+			const visible = viewerInput.camera.frustum.contains(entity.aabb);
 
-			if (!visible && !entity.alwaysUpdate)
-				continue;
-
-			const result : EntityUpdateResult = entity.update(dt);
-			if (result === false){
-				// destroy this entity
-				this.entities.splice(i, 1);
-				--i;
-				continue;
+			if (visible || entity.alwaysUpdate){
+				const result : EntityUpdateResult = entity.update(dt);
+				if (result === false){
+					// destroy this entity
+					this.entities.splice(i, 1);
+					--i;
+					continue;
+				}
+				if (result){
+					// created new entity
+					this.entities.push(result);
+				}
 			}
-			if (result){
-				// created new entity
-				this.entities.push(result);
-			}
 
-			if (visible)
-				entity.prepareToRender(device, renderInstManager, viewerInput, this.cache);
+			entity.viewDistance = visible ? computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix, entity.position) : InvisibleViewDistance;
 		}
+
+		// draw
+		for (const set of this.meshSets){
+			prepareToRenderMeshSet(device, renderInstManager, viewerInput, this.cache, set);
+		}
+
+		
 			
         renderInstManager.popTemplateRenderInst();
         this.renderHelper.prepareToRender();

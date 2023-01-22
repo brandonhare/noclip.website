@@ -50,6 +50,8 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 					this.entities.push(entity);
 			}
 		}
+
+		this.initEntities();
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : NanosaurRawAssets){

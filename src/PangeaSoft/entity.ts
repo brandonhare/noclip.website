@@ -70,6 +70,8 @@ export class Entity {
 	colour : GfxColor = {r:1,g:1,b:1,a:1};
 	alwaysUpdate = false;
 
+	viewDistance = 0; // filled in by the renderer each frame
+
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
 			assert(meshes != undefined, "invalid mesh for entity");
@@ -107,10 +109,6 @@ export class Entity {
 			this.aabb.union(this.aabb, mesh.aabb);
 		}
 		this.aabb.transform(this.aabb, this.modelMatrix);
-	}
-
-	checkVisible(frustum : Frustum){
-		return frustum.contains(this.aabb);
 	}
 
 	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
