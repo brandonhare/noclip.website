@@ -259,7 +259,7 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				if (this.t < 0)
 					return false;
 
-				this.colour.a = Math.min(1, 3 * this.t);
+				this.opacity = Math.min(1, 3 * this.t);
 
 				for (let i = 0; i < 3; ++i){
 					this.scale[i] += dt * 0.5;
@@ -420,14 +420,14 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 					const scale = 5 - this.t * 5;
 					this.scale.fill(scale);
 					this.position[1] = this.startY + this.t * 20;
-					this.colour.a = (5 - scale) / 4;
+					this.opacity = (5 - scale) / 4;
 				} else {
 					const t = this.t - 0.8;
 					this.scale.fill(1);
 					// dy += 250dt
 					// y += dy
 					this.position[1] = this.startY + t * t * 125 + t * 50 + 16;
-					this.colour.a = Math.max(0, 1 - t * 0.6);
+					this.opacity = Math.max(0, 1 - t * 0.6);
 				}
 				this.updateMatrix();
 			}
@@ -582,8 +582,6 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 				this.position[2] = this.startZ + this.t * 45;
 				this.rotation = Math.PI * -0.5 + this.t * Math.PI / 9;
 				this.rotX = Math.sin(this.t * 1.5) * 0.3;
-				// fade in
-				this.colour.r = this.colour.g = this.colour.b = Math.min(1, this.t * 1.3);
 				this.updateMatrix();
 			}
 		}

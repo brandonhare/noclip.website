@@ -31,6 +31,8 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 
 		this.createModels(device, this.cache, assets);
 
+		const entities : Entity[] = [];
+
 		// create terrain
 		if (this.processedAssets.terrain){
 			const info = this.processedAssets.terrainInfo!;
@@ -39,7 +41,7 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			terrainEntity.scale[1] = info.yScale;
 			terrainEntity.scale[2] = info.xzScale;
 			terrainEntity.updateMatrix();
-			this.entities.push(terrainEntity);
+			entities.push(terrainEntity);
 		}
 
 		// create entities
@@ -47,14 +49,14 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 			const entity = (entityCreationFunctions[objectDef.type] ?? invalidEntityType)(objectDef, this.processedAssets);
 			if (entity){
 				if (Array.isArray(entity))
-					this.entities.push(...entity);
+					entities.push(...entity);
 				else
-					this.entities.push(entity);
+					entities.push(entity);
 			}
 		}
 	
 		// finish up
-		this.initEntities(device);
+		this.initEntities(device, entities);
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : NanosaurRawAssets){

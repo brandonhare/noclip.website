@@ -66,9 +66,11 @@ export class Entity {
 	modelMatrix : mat4 = mat4.create();
 	baseAABB : AABB = new AABB(); // before modelMatrix transform
 	aabb : AABB = new AABB(); // after modelMatrix transform
-	colour : GfxColor = {r:1,g:1,b:1,a:1};
+	opacity = 1;
 	alwaysUpdate = false;
 	isDynamic = false;
+	
+	viewDistance = 0; // set by the renderer each frame
 
 	constructor(meshes : StaticObject | StaticObject[], position : vec3, rotation : number | null, scale : number, pushUp : boolean = false){
 		if (!Array.isArray(meshes)){
@@ -106,15 +108,6 @@ export class Entity {
 			this.position[0], this.position[1], this.position[2]);
 
 		this.aabb.transform(this.baseAABB, this.modelMatrix);
-	}
-
-	checkVisible(frustum : Frustum){
-		return frustum.contains(this.aabb);
-	}
-
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache): void {
-		for (const mesh of this.meshes)
-			mesh.prepareToRender(device, renderInstManager, viewerInput, cache, this);
 	}
 	
 	update?(dt : number) : EntityUpdateResult;

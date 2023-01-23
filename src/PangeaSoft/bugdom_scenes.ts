@@ -29,6 +29,8 @@ export class BugdomSceneRenderer extends SceneRenderer {
 		this.createModels(device, this.cache, assets);
 		this.processedAssets.levelType = levelType;
 
+		const entities : Entity[] = [];
+
 		// create terrain entities
 		for (let i = 0; i < this.processedAssets.terrain.length; ++i){
 			const terrainMesh = this.processedAssets.terrain[i];
@@ -38,7 +40,7 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			terrainEntity.scale[1] = terrainInfo.yScale;
 			terrainEntity.scale[2] = terrainInfo.xzScale;
 			terrainEntity.updateMatrix();
-			this.entities.push(terrainEntity);
+			entities.push(terrainEntity);
 		}
 
 		// create entities
@@ -46,14 +48,14 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			const entity = spawnBugdomEntity(objectDef, this.processedAssets);
 			if (entity){
 				if (Array.isArray(entity))
-					this.entities.push(...entity);
+					entities.push(...entity);
 				else
-					this.entities.push(entity);
+					entities.push(entity);
 			}
 		}
 
 		// finish up
-		this.initEntities(device);
+		this.initEntities(device, entities);
 	}
 	
 	createModels(device : GfxDevice, cache : Cache, rawAssets : BugdomRawAssets){
