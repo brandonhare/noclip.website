@@ -11,7 +11,7 @@ import { GfxShaderLibrary } from "../gfx/helpers/GfxShaderLibrary";
 import { makeAttachmentClearDescriptor, makeBackbufferDescSimple, pushAntialiasingPostProcessPass } from "../gfx/helpers/RenderGraphHelpers";
 import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers";
 import { fillColor, fillMatrix4x3, fillMatrix4x4, fillVec4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers";
-import { GfxBlendFactor, GfxBlendMode, GfxBufferUsage, GfxColor, GfxCullMode, GfxDevice, GfxIndexBufferDescriptor, GfxInputLayoutBufferDescriptor, GfxMipFilterMode, GfxSamplerFormatKind, GfxTexFilterMode, GfxTextureDimension, GfxTextureUsage, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { GfxBindingLayoutSamplerDescriptor, GfxBlendFactor, GfxBlendMode, GfxBufferUsage, GfxColor, GfxCullMode, GfxDevice, GfxIndexBufferDescriptor, GfxInputLayoutBufferDescriptor, GfxMipFilterMode, GfxSamplerFormatKind, GfxTexFilterMode, GfxTextureDimension, GfxTextureUsage, GfxVertexAttributeDescriptor, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { GfxFormat } from "../gfx/platform/GfxPlatformFormat";
 import { GfxBuffer, GfxInputLayout, GfxInputState, GfxProgram, GfxTexture } from "../gfx/platform/GfxPlatformImpl";
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
@@ -37,17 +37,18 @@ const enum Settings {
 
 
 export const enum RenderFlags {
-	Translucent		 = 0x400,
-	Skinned			 = 0x200,
-	Reflective       = 0x100,
-	DrawBackfacesSeparately = 0x80,
-	KeepBackfaces    = 0x40,
-	Unlit			 = 0x20,
-	ScrollUVs        = 0x10,
-	HasTexture		 = 0x8,
-	TextureHasOneBitAlpha  = 0x4,
-	TextureTilemap	 = 0x2,
-	HasVertexColours = 0x1,
+	Translucent = 1<<11,
+	TextureHasOneBitAlpha = 1<<10,
+	Skinned = 1<<9,
+	HasTexture = 1<<8,
+	HasMeshColour = 1<<7,
+	KeepBackfaces = 1<<6,
+	DrawBackfacesSeparately = 1<<5,
+	Unlit = 1<<4,
+	ScrollUVs = 1<<3,
+	Reflective = 1<<2,
+	TextureTilemap = 1<<1,
+	HasVertexColours = 1<<0,
 }
 
 export class Program extends DeviceProgram {
@@ -59,7 +60,8 @@ export class Program extends DeviceProgram {
 	static readonly a_BoneIds = 5;
 
 	static readonly ub_SceneParams = 0;
-	static readonly ub_DrawParams = 1;
+	static readonly ub_InstanceParams = 1;
+	static readonly ub_MeshParams = 2;
 
 	static readonly s_Texture = 0;
 	static readonly s_AnimTexture = 1;
@@ -71,6 +73,7 @@ export class Program extends DeviceProgram {
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
 		this.setDefineBool("HAS_TEXTURE", (flags & RenderFlags.HasTexture) !== 0);
+		this.setDefineBool("HAS_MESH_COLOUR", (flags & RenderFlags.HasMeshColour) !== 0);
 		this.setDefineBool("TEXTURE_HAS_ONE_BIT_ALPHA", (flags & RenderFlags.TextureHasOneBitAlpha) !== 0);
 		this.setDefineBool("TILEMAP", (flags & RenderFlags.TextureTilemap) !== 0);
 		this.setDefineBool("SCROLL_UVS", (flags & RenderFlags.ScrollUVs) !== 0);
@@ -96,17 +99,20 @@ layout(std140) uniform ub_SceneParams {
 
 layout(std140) uniform ub_DrawParams {
 	Mat4x3 u_WorldFromModelMatrix;
-	vec4 u_Colour;
-	
-	#ifdef SCROLL_UVS
-		vec4 u_UVScrollVec; // xy = uv, zw = unused
-		#define u_UVScroll (u_UVScrollVec.xy)
+	vec4 u_Params; // x = anim time, y = anim texture width; w = opacity
+};
+
+#if defined(HAS_MESH_COLOUR) || defined(SCROLL_UVS)
+layout(std140) uniform ub_MeshParams {
+	#ifdef HAS_MESH_COLOUR
+		vec4 u_MeshColour;
 	#endif
 
-	#ifdef SKINNED
-		vec4 u_AnimParams;
+	#ifdef SCROLL_UVS
+		vec4 u_UVScroll; // xy = uv, zw = unused
 	#endif
 };
+#endif
 `;
 	override vert = 
 `
@@ -133,8 +139,14 @@ void main() {
 	vec3 localPos = a_Position;
 	vec3 localNormal = a_Normal;
 
-	vec4 colour = u_Colour;
+	vec4 colour = vec4(1.0);
 	vec2 uv = a_UV;
+
+	#ifdef HAS_MESH_COLOUR
+		colour = u_MeshColour;
+	#endif
+
+	colour.a *= u_Params.a;
 
 	#ifdef TILEMAP
 		uv = a_Position.xz;
@@ -144,8 +156,8 @@ void main() {
 
 	#ifdef SKINNED
 	{
-		float animT = u_AnimParams.x;
-		float texelWidth = u_AnimParams.y;
+		float animT = u_Params.x;
+		float texelWidth = u_Params.y;
 
 		vec2 boneUv = vec2((a_BoneId * 3.0 + 0.5) * texelWidth, animT);
 
@@ -180,6 +192,11 @@ void main() {
 		colour.xyz *= lightColour;
 	}
 	#endif
+
+	#ifdef SCROLL_UVS
+		uv += u_UVScroll.xy;
+	#endif
+
 	v_UV = uv;
 	v_Colour = colour;
     gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
@@ -205,10 +222,6 @@ in vec2 v_UV;
 void main(){
 	vec4 colour = v_Colour;
 	vec2 uv = v_UV;
-
-	#ifdef SCROLL_UVS
-		uv += u_UVScroll * u_Time;
-	#endif
 	
 	#ifdef HAS_TEXTURE
 	{
@@ -363,7 +376,7 @@ export class StaticObject implements Destroyable {
 	constructor(device : GfxDevice, cache : Cache, mesh : Qd3DMesh, name : string){
 		this.indexCount = mesh.numTriangles * 3;
 		this.aabb = mesh.aabb;
-		this.colour = mesh.colour;
+		this.colour = {...mesh.colour};
 
 		cache.addModel(this, mesh);
 
@@ -418,7 +431,10 @@ export class StaticObject implements Destroyable {
 			this.renderFlags |= RenderFlags.HasVertexColours;
 
 		if (this.colour.a < 1){
-			this.renderFlags |= RenderFlags.Translucent;
+			this.renderFlags |= RenderFlags.Translucent | RenderFlags.HasMeshColour;
+		} else if (this.colour.r !== 1 || this.colour.g !== 1 || this.colour.b != 1) {
+			this.renderFlags |= RenderFlags.HasMeshColour;
+
 		}
 
 		if (isSkinned)
@@ -472,27 +488,30 @@ export class StaticObject implements Destroyable {
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
+		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
+		const hasMeshColour = renderFlags & RenderFlags.HasMeshColour;
+		const hasMeshUniforms = scrollUVs || hasMeshColour;
+		const numUniformBuffers = 2 + (hasMeshUniforms?1:0);
 		const numSamplers = skinned ? 2 : (hasTexture ? 1 : 0);
-		if (numSamplers === 0){
-			renderInst.setBindingLayouts([{
-				numUniformBuffers:2,
-				numSamplers:0
-			}]);
-		} else if (textureArray || skinned){
-			const texEntry = {
-				dimension : textureArray ? GfxTextureDimension.n2DArray : GfxTextureDimension.n2D,
-				formatKind : GfxSamplerFormatKind.Float,
-			};
-			renderInst.setBindingLayouts([{
-				numUniformBuffers : 2,
-				numSamplers,
-				samplerEntries:
-					skinned ? [texEntry, {
-						dimension :  GfxTextureDimension.n2D,
-						formatKind : GfxSamplerFormatKind.Float,
-					}] : [texEntry]
-			}]);
-		}
+
+
+		const samplerEntries : GfxBindingLayoutSamplerDescriptor[] = numSamplers ? [{
+			dimension : textureArray ? GfxTextureDimension.n2DArray : GfxTextureDimension.n2D,
+			formatKind : GfxSamplerFormatKind.Float,
+		}] : [];
+		if (skinned)
+			samplerEntries.push({
+				dimension :  GfxTextureDimension.n2D,
+				formatKind : GfxSamplerFormatKind.Float
+			});
+
+		renderInst.setBindingLayouts([{
+			numUniformBuffers,
+			numSamplers,
+			samplerEntries,
+		}]);
+
+		
 		const animEntity = (entity as AnimatedEntity);
         renderInst.setSamplerBindingsFromTextureMappings([
 			this.textureMapping ?? null,
@@ -523,27 +542,33 @@ export class StaticObject implements Destroyable {
 		
         renderInst.drawIndexes(this.indexCount);
 
-		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_DrawParams, 4*4 + 4 + (scrollUVs?4:0) + (skinned?4:0));
-		const uniformData = renderInst.mapUniformBufferF32(Program.ub_DrawParams);
-		
-		uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
-		uniformOffset += fillVec4(uniformData, uniformOffset, this.colour.r * entity.colour.r, this.colour.g * entity.colour.g, this.colour.b * entity.colour.b, this.colour.a * entity.colour.a);
+		// fill mesh uniforms
+		if (hasMeshColour || scrollUVs){
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_MeshParams, (scrollUVs?4:0) + (hasMeshColour?4:0));
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_MeshParams);
 
-		if (scrollUVs){
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
-			// repeat for padding
-			uniformData[uniformOffset++] = this.scrollUVs[0];
-			uniformData[uniformOffset++] = this.scrollUVs[1];
+			if (hasMeshColour)
+				uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
+			if (scrollUVs){
+				const t = viewerInput.time * 0.001;
+				uniformOffset += fillVec4(uniformData, uniformOffset, this.scrollUVs[0] * t, this.scrollUVs[1] * t);
+			}
 		}
 
-		if (skinned){
-			const animController = (entity as AnimatedEntity).animationController;
-			const t = animController.t / animController.animation.anims[animController.currentAnimationIndex].endTime;
-			const texelWidth = 1 / (animController.animation.numBones * 3);
-			uniformOffset += fillVec4(uniformData, uniformOffset, t, texelWidth,0,0);
+		{ // fill instance uniforms
+			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, 4*3 + 4);
+			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+			
+			uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
+			if (skinned){
+				const animController = (entity as AnimatedEntity).animationController;
+				const t = animController.t / animController.animation.anims[animController.currentAnimationIndex].endTime;
+				const texelWidth = 1 / (animController.animation.numBones * 3);
+				uniformOffset += fillVec4(uniformData, uniformOffset, t, texelWidth, 0, entity.colour.a);
+			} else {
+				uniformOffset += fillVec4(uniformData, uniformOffset, 0,0,0, entity.colour.a);
+			}
 		}
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
@@ -570,7 +595,7 @@ export class StaticObject implements Destroyable {
 	
 	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
 		this.colour.a = alpha;
-		this.renderFlags |= RenderFlags.Translucent;
+		this.renderFlags |= RenderFlags.Translucent | RenderFlags.HasMeshColour;
 		if (unlit)
 			this.renderFlags |= RenderFlags.Unlit;
 		if (keepBackfaces)
@@ -825,7 +850,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
 		renderInst.setBindingLayouts([{
 			numUniformBuffers : 2,
-			numSamplers : 1,
+			numSamplers : 0,
 		}]);
 		const numLights = this.cache.numLights;
 		// set scene uniforms

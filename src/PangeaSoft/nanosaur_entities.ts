@@ -82,7 +82,7 @@ export function initNanosaurMeshRenderSettings(assets : NanosaurProcessedAssets)
 	if (globalModels){
 		// shadow
 		const shadowModel = globalModels[1][0];
-		shadowModel.renderFlags |= RenderFlags.Translucent;
+		shadowModel.makeTranslucent(1, false, false);
 		shadowModel.renderLayerOffset = -2; // draw shadows below water
 		shadowModel.colour.r = shadowModel.colour.b = shadowModel.colour.g = 0; // sprite texture is white, make it black
 		// smoke puff
