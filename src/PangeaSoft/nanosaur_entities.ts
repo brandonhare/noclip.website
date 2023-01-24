@@ -208,6 +208,16 @@ class ShadowEntity extends Entity {
 	}
 }
 
+class HighscoreEntity extends Entity {
+	t = 0;
+	startX = this.position[0];
+	override alwaysUpdate = true;
+	override update(dt: number) {
+		this.t = (this.t + dt) % (2200/70);
+		this.position[0] = this.startX - this.t * 70;
+		this.updateMatrix();
+	}
+}
 
 function spawnTriceratops(def : LevelObjectDef, assets : NanosaurProcessedAssets){ // 2
 	const result = new AnimatedEntity(assets.skeletons.Tricer!, [def.x, def.y, def.z], null, 2.2, 1, false);
@@ -629,16 +639,16 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 	},
 	// high scores stuff
 	function spawnSpiral(def, assets) { // 28
-		class SpiralEntity extends Entity {
+		class SpiralEntity extends HighscoreEntity {
 			override update(dt: number): EntityUpdateResult {
 				this.rotX += dt * 1.5;
-				this.updateMatrix();
+				super.update(dt);
 			}
 		}
 		return new SpiralEntity(assets.models.HighScores[45], [def.x, def.y, def.z], def.rot ?? 0, def.scale ?? 1, false);
 	},
 	function spawnLetter(def, assets) { //29 
-		return new Entity(assets.models.HighScores[def.param0], [def.x, def.y, def.z], 0, 1, false);
+		return new HighscoreEntity(assets.models.HighScores[def.param0], [def.x, def.y, def.z], 0, 1, false);
 	},
 ];
 export function invalidEntityType(def : LevelObjectDef, assets : NanosaurProcessedAssets) {

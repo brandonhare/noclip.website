@@ -311,8 +311,10 @@ function createTitleObjectList() : LevelObjectDef[]{
 }
 function createHighScoresObjectList() : LevelObjectDef[]{
 	const scores = [
-		"cool", 100,
-		"brandonhare", 50,
+		"Nanosaur", 1998,
+		"Pangea Software", 2000,
+		"Updated By Iliyas Jorio", 2020,
+		"Noclip Port By Brandonhare", 2023,
 	];
 	const result : LevelObjectDef[] = [
 		{
