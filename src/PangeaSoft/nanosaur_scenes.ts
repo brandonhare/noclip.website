@@ -184,8 +184,8 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			: Promise<NanosaurParseTerrainResult> | [undefined, undefined, LevelObjectDef[]]
 				= this.def.terrain 
 				? Promise.all([
-						context.dataFetcher.fetchData(`${pathBase}/terrain/${this.def.terrain}.ter`),
-						context.dataFetcher.fetchData(pathBase + "/terrain/Level1.trt"),
+						context.dataFetcher.fetchData(`${pathBase}/Terrain/${this.def.terrain}.ter`),
+						context.dataFetcher.fetchData(pathBase + "/Terrain/Level1.trt"),
 					]).then(([terrainData, terrainTexture]) => parseTerrain(terrainData, terrainTexture))
 				: [undefined, undefined, []];
 
