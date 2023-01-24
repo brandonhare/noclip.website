@@ -663,7 +663,7 @@ export class MultiSelect extends ScrollSelect {
 export class Checkbox implements Widget {
     public elem: HTMLElement;
     public checked: boolean = false;
-    public onchanged: (() => void) | null = null;
+    public onchanged: ((checked : boolean) => void) | null = null;
 
     private toplevel: HTMLElement;
     private label: HTMLElement;
@@ -715,7 +715,7 @@ export class Checkbox implements Widget {
     private _toggle(): void {
         this.setChecked(!this.checked);
         if (this.onchanged !== null)
-            this.onchanged();
+            this.onchanged(this.checked);
     }
 
     public setLabel(text: string): void {
