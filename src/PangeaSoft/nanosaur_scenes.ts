@@ -1,11 +1,12 @@
-import * as Viewer from '../viewer';
+import * as UI from "../ui";
+import * as Viewer from "../viewer";
 
+import { vec4 } from "gl-matrix";
 import { DataFetcher } from "../DataFetcher";
 import { GfxDevice, GfxFormat, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { MathConstants } from "../MathHelpers";
 import { SceneContext } from "../SceneBase";
 import { assert } from "../util";
-import { vec4 } from "gl-matrix";
 
 import { parseAppleDouble } from "./AppleDouble";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
@@ -14,7 +15,9 @@ import { NanosaurParseTerrainResult, parseTerrain } from "./nanosaur_terrain";
 import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
-import { loadTextureFromTGA } from "./TGA";
+import { loadTextureFromTGA, TGATexture } from "./TGA";
+import { convertToCanvasData } from "../gfx/helpers/TextureConversionHelpers";
+import ArrayBufferSlice from "../ArrayBufferSlice";
 
 const pathBase = "nanosaur";
 
@@ -25,9 +28,12 @@ export type NanosaurRawAssets = Assets<Qd3DMesh, SkeletalMesh, Qd3DMesh|undefine
 export class NanosaurSceneRenderer extends SceneRenderer {
 
 	processedAssets : NanosaurProcessedAssets = {models : {}, skeletons : {}, terrain : undefined, terrainInfo : undefined};
+	dataFetcher : DataFetcher;
 
 	constructor(device : GfxDevice, context : SceneContext, assets : NanosaurRawAssets, objectList : LevelObjectDef[], sceneSettings : SceneSettings){
 		super(device, context, sceneSettings);
+
+		this.dataFetcher = context.dataFetcher;
 
 		this.createModels(device, this.cache, assets);
 
@@ -86,6 +92,12 @@ export class NanosaurSceneRenderer extends SceneRenderer {
 		
 		if (cache.onnewtextures)
 			cache.onnewtextures();
+	}
+
+	override createPanels() {
+		const result = super.createPanels();
+		result.push(new CreditsPanel(this.dataFetcher));
+		return result;
 	}
 }
 
@@ -213,6 +225,67 @@ class NanosaurSceneDesc implements Viewer.SceneDesc {
 			rawAssets.models.Global_Models[1][0].texture = await shadowTexturePromise;
 
 		return new NanosaurSceneRenderer(device, context, rawAssets, objects, this.def.settings);
+	}
+}
+
+
+class CreditsPanel extends UI.Panel {
+	imagesCreated = false;
+	constructor(public dataFetcher : DataFetcher){
+		super();
+
+		this.customHeaderBackgroundColor = "blue";
+		this.setTitle(UI.ABOUT_ICON, "Credits");
+
+		this.contents.innerHTML = `
+<div id="NanosaurCredits">
+<style>
+	#NanosaurCredits { padding: 12px; }
+	#NanosaurCredits h1 { margin-top: 0; }
+	#NanosaurCredits a { color: white; }
+</style>
+<h1>Nanosaur</h1>
+<h3>1998 by <a href="https://pangeasoft.net/nano/index.html" target="_blank">Pangea Software</a></h3>
+<p>
+<strong>Contributed</strong> by <a href="https://brandonhare.itch.io/" target="_blank">@brandonhare</a>
+</p>
+</p>
+<strong>Based on the</strong> <a href="https://github.com/jorio/Nanosaur" target="_blank">open source enhanced port</a> by <a href="https://jorio.itch.io/" target="_blank">Iliyas Jorio</a>
+</p>
+<div id=NanosaurCreditImages></div>
+</div>
+`;
+	}
+
+	public override syncExpanded() {
+	if (!super.syncExpanded())
+		return false;
+		
+		if (!this.imagesCreated && this.expanded){
+			this.imagesCreated = true;
+
+			const dest = this.contents.querySelector("#NanosaurCreditImages")!;
+
+			for (const name of [
+				"Boot1Pro.tga",
+				"Boot2.tga",
+				"Charity1.tga",
+				"Charity3.tga",
+			]){
+				const imgElem = document.createElement("canvas");
+				imgElem.style.width = "100%";
+				dest.appendChild(imgElem);
+				this.dataFetcher.fetchData(`${pathBase}/Images/${name}`)
+					.then((data)=>{
+						const tex = loadTextureFromTGA(data);
+						imgElem.width = tex.width;
+						imgElem.height = tex.height;
+						convertToCanvasData(imgElem, ArrayBufferSlice.fromView(tex.pixels), tex.pixelFormat);
+					});
+			}
+
+		}
+		return true;
 	}
 }
 

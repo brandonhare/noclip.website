@@ -770,7 +770,7 @@ class ScenePanel extends UI.Panel {
 	constructor(scene : SceneRenderer){
 		super();
 		this.settings = scene.sceneSettings;
-
+		this.customHeaderBackgroundColor = "blue";
 		this.setTitle(UI.RENDER_HACKS_ICON, "Render Hacks");
 
 		// fog settings
@@ -819,7 +819,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 	}
 
 
-    createPanels() {
+    createPanels() : UI.Panel[] {
 		return [new ScenePanel(this)];
 	}
 
