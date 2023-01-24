@@ -33,7 +33,7 @@ const enum Settings {
 	AnimationTextureFps = 30,
 	DefaultTexFilter = GfxTexFilterMode.Bilinear,
 	MaxInstances = 64,
-	MinInstances = 1,
+	MinInstances = 4,
 };
 
 
@@ -69,8 +69,6 @@ export class Program extends DeviceProgram {
 
 	constructor(flags : RenderFlags, numLights : number, maxInstances : number){
 		super();
-
-		console.log("making shader", flags, maxInstances);
 
 		this.setDefineString("NUM_LIGHTS", numLights.toString());
 		this.setDefineString("MAX_INSTANCES", maxInstances.toString());
@@ -789,13 +787,22 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		}
 
 		// debug validate meshes are consistent
+		/*
 		for (const set of this.entitySets){
 			const meshes = set[0].meshes;
 			assert(set.every((entity)=>entity.meshes === meshes), "mismatched mesh types");
 		}
+		*/
 
 		// roughly sort by mesh type for fun
 		this.entitySets.sort((a,b)=>a[0].meshes[0].renderFlags - b[0].meshes[0].renderFlags);
+
+		// generate shaders up front
+		for (const set of this.entitySets){
+			for (const mesh of set[0].meshes){
+				this.cache.getProgram(mesh.renderFlags, set.length);
+			}
+		}
 
 		// done generating models, done with these caches
 		this.cache.sourceModels.clear();
