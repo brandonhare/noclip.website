@@ -254,6 +254,8 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 			t = 0.5;
 			decayRate = Math.random() * 0.3 + 0.9;
 
+			override alwaysUpdate = true;
+
 			override update(dt : number) : void | false {
 				this.t -= dt * this.decayRate;
 				if (this.t < 0)
@@ -274,15 +276,17 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 
 			velocity : vec3 = [(Math.random() - 0.5) * 300,300 + Math.random() * 400,(Math.random() - 0.5) * 300]
 			puffTimer = 0;
-			killY = 0;
+			terrainInfo : TerrainInfo = undefined!;
+
+			override alwaysUpdate = true;
 
 			override update(dt : number) : void | SmokePuffEntity | false {
 				this.velocity[1] -= 560 * dt;
 				for (let i = 0; i < 3; ++i)
 					this.position[i] += this.velocity[i] * dt;
 
-				if (this.position[1] < this.killY){
-					// todo destroy when hit ground
+				if (this.position[1] <= this.terrainInfo.getHeight(this.position[0], this.position[2])){
+					// hit the ground, get destroyed
 					return false;
 				}
 
@@ -301,8 +305,13 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 
 		class LavaEntity extends UndulateEntity {
 			fireballTimer = Math.random() * 0.4;
+			terrainInfo : TerrainInfo = undefined!;
+
 			override update(dt : number) : FireballEntity | void {
 				super.update(dt);
+
+				if (this.viewDistance > 10000)
+					return;
 				this.fireballTimer += dt;
 				if (this.fireballTimer > 0.4){
 					this.fireballTimer %= 0.4;
@@ -312,8 +321,12 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 						this.position[1] - 20,
 						this.position[2] + (Math.random() - 0.5) * 700
 					];
+
+					if (this.terrainInfo.getHeight(pos[0], pos[2]) >= pos[1])
+						return;
+
 					const fireball = new FireballEntity(fireballMesh, pos, 0, 0.3, false);
-					fireball.killY = this.position[1] - 20;
+					fireball.terrainInfo = this.terrainInfo;
 					return fireball;
 				}
 			}
@@ -326,9 +339,11 @@ export const entityCreationFunctions : ((def:LevelObjectDef, assets : NanosaurPr
 		const scale = (def.param3 & (1<<2)) ? 1 : 2;
 		const shootFireballs = (def.param3 & (1<<1)) !== 0;
 		let result : UndulateEntity;
-		if (shootFireballs && false) // todo optimize
-			result = new LavaEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
-		else
+		if (shootFireballs){
+			const lava = new LavaEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
+			lava.terrainInfo = assets.terrainInfo!;
+			result = lava;
+		} else
 			result = new UndulateEntity(assets.models.Level1_Models[1], [x,y,z], 0, scale, false);
 		result.baseScale = 0.501;
 		result.amplitude = 0.5;

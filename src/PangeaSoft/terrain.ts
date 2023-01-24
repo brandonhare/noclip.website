@@ -20,6 +20,10 @@ export class TerrainInfo {
 		z /= this.xzScale;
 		const row = Math.floor(z);
 		const col = Math.floor(x);
+
+		if (row < 0 || col < 0 || row >= this.height || col >= this.width)
+			return 0;
+
 		const baseIndex = row * this.stride + col;
 		x %= 1;
 		z %= 1;
