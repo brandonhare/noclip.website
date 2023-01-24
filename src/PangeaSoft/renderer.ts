@@ -30,7 +30,6 @@ import { AnimationController, AnimationData, calculateAnimationTransforms, Skele
 
 // Settings
 const enum Settings {
-	MeshMergeThreshold = 10,
 	AnimationTextureFps = 30,
 	DefaultTexFilter = GfxTexFilterMode.Bilinear,
 	MaxInstances = 64,
@@ -735,93 +734,6 @@ export class AnimatedObject {
 };
 
 
-function mergeMeshes(device : GfxDevice, cache : Cache, entities : Entity[]) : Entity {
-
-	const pos : vec3 = [0,0,0];
-	const norm : vec4 = [0,0,0,0];
-	const normalTransform = mat4.create();
-
-	const newMeshes = entities[0].meshes.map((mesh)=>{
-		const rawMesh = assertExists(cache.sourceModels.get(mesh), "missing source mesh");
-
-		const count = entities.length;
-		const numVertices = rawMesh.numVertices * count;
-		const numTriangles = rawMesh.numTriangles * count;
-		const numIndices = numTriangles * 3;
-
-		const indexStride = rawMesh.numTriangles * 3;
-		const vertexStride = rawMesh.numVertices * 3;
-		const uvStride = rawMesh.numVertices * 2;
-		
-
-		const aabb = new AABB();
-		const indices = (numVertices <= 0x10000) ? new Uint16Array(numIndices) : new Uint32Array(numIndices);
-		const vertices = new Float32Array(numVertices*3);
-		const UVs = rawMesh.UVs ? new Float32Array(numVertices*2) : undefined;
-		const normals = rawMesh.normals ? new Float32Array(numVertices*3) : undefined;
-		const vertexColours = rawMesh.vertexColours ? (
-			rawMesh.vertexColours.BYTES_PER_ELEMENT === 1 ? new Uint8Array(numVertices * 3) : new Float32Array(numVertices * 3)
-		) : undefined;
-		assert(!rawMesh.tilemapIds && !rawMesh.boneIds, "cannot merge tilemaps or bones");
-
-		for (let i = 0; i < count; ++i){
-
-			UVs?.set(rawMesh.UVs!, uvStride * i);
-			vertexColours?.set(rawMesh.vertexColours!, vertexStride * i);
-
-			// merge indices
-			for (let j = 0; j < indexStride; ++j)
-				indices[indexStride * i + j] = rawMesh.indices[j] + rawMesh.numVertices * i;
-
-			// merge verts
-			const transform = entities[i].modelMatrix;
-			for (let j = 0; j < vertexStride; j += 3){
-				for (let k = 0; k < 3; ++k)
-					pos[k] = rawMesh.vertices[j+k];
-				vec3.transformMat4(pos, pos, transform);
-				aabb.unionPoint(pos);
-				for (let k = 0; k < 3; ++k)
-					vertices[i*vertexStride+j+k] = pos[k];
-			}
-			
-			if (normals){
-				// merge normals
-				computeNormalMatrix(normalTransform, transform);
-				for (let j = 0; j < vertexStride; j += 3){
-					for (let k = 0; k < 3; ++k)
-						norm[k] = rawMesh.normals![j+k];
-					vec4.transformMat4(norm, norm, normalTransform);
-					vec4.normalize(norm, norm);
-					for (let k = 0; k < 3; ++k)
-						normals[i*vertexStride+j+k] = norm[k];
-				}
-			}
-		}
-
-		const mergedMesh : Qd3DMesh = {
-			numTriangles,
-			numVertices,
-			aabb,
-			colour : mesh.colour,
-			texture : rawMesh.texture,
-
-			indices,
-			vertices,
-			UVs,
-			normals,
-			vertexColours,
-		};
-
-		const result = new StaticObject(device, cache, mergedMesh, "Merged mesh");
-		result.renderFlags = mesh.renderFlags;
-		result.renderLayerOffset = mesh.renderLayerOffset;
-		result.scrollUVs = mesh.scrollUVs;
-		return result;
-	});
-	return new Entity(newMeshes, [0,0,0], 0, 1, false);
-}
-
-
 export type SceneSettings = {
 	clearColour : GfxColor,
 	ambientColour : GfxColor,
@@ -884,22 +796,6 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
 		// roughly sort by mesh type for fun
 		this.entitySets.sort((a,b)=>a[0].meshes[0].renderFlags - b[0].meshes[0].renderFlags);
-
-		// todo: merge meshes again
-		/*
-		// merge static entities
-		staticEntityMap.forEach((entities, firstMesh)=>{
-			if (entities.length <= Settings.MeshMergeThreshold){
-				// never mind, put them back
-				this.entities.push(...entities);
-				staticEntityMap.delete(firstMesh);
-				return;
-			} else {
-				// todo: split into area-based batches
-				this.entities.push(mergeMeshes(device, this.cache, entities));
-			}
-		});
-		*/
 
 		// done generating models, done with these caches
 		this.cache.sourceModels.clear();
