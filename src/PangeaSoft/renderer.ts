@@ -33,6 +33,8 @@ const enum Settings {
 	MeshMergeThreshold = 10,
 	AnimationTextureFps = 30,
 	DefaultTexFilter = GfxTexFilterMode.Bilinear,
+	MaxInstances = 64,
+	MinInstances = 1,
 };
 
 
@@ -288,27 +290,16 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
 
-	getInstanceCount(count : number){
-		if (count <= 1)
-			return count;
-		if (count <= 8)
-			return 8;
-		if (count <= 32)
-			return 32;
-		if (count <= 128)
-			return 128;
-		if (count <= 256)
-			return 256;
-		if (count <= 512)
-			return 512;
-		if (count <= 640)
-			return 640;
-		return 1000;
+	getInstanceBufferSize(count : number){
+		if (count < Settings.MinInstances)
+			return 1;
+		else
+			return Settings.MaxInstances;
 	}
 
 
 	getProgram(renderFlags : RenderFlags, numInstances : number){
-		numInstances = this.getInstanceCount(numInstances);
+		numInstances = this.getInstanceBufferSize(numInstances);
 		const index = renderFlags + (numInstances << 12);
 		let program = this.programs.get(index);
 		if (program)
@@ -1007,34 +998,41 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			if (count === 0)
 				continue; // nobody visible
 
-			// populate uniforms
-			const renderInst = renderInstManager.pushTemplateRenderInst();
-			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, cache.getInstanceCount(count) * 4*4);
-			const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
-			for (let i = startIndex; i < endIndex; ++i){
-				const entity = entities[i];
-				// push matrix uniform
-				uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
-				// push settings unifom
-				if (skinned){ // skinned settings
-					const animEntity = entity as AnimatedEntity;
-
-					uniformOffset += animEntity.animatedObject.fillAnimationUniform(uniformData, uniformOffset, animEntity.animationController);
-
-					// set opacity to w field
-					uniformData[uniformOffset - 1] = entity.opacity;
-
-				} else { // basic settings
-					uniformOffset += fillVec4(uniformData, uniformOffset, 0, 0, 0,  entity.opacity);
-				}
-			}
-
 			// draw
-			for (const mesh of firstEntity.meshes){
-				mesh.prepareToRender(device, renderInstManager, viewerInput, cache, count);
-			}
+			const setSize = cache.getInstanceBufferSize(count);
+			for (let setStartIndex = 0; setStartIndex < endIndex; setStartIndex += setSize){
+				const setEndIndex = Math.min(setStartIndex + setSize, endIndex);
+				const setCount = setEndIndex - setStartIndex;
+				
+				// populate uniforms
+				const renderInst = renderInstManager.pushTemplateRenderInst();
+				let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, cache.getInstanceBufferSize(setCount) * 4*4);
+				const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
+				for (let i = setStartIndex; i < setEndIndex; ++i){
+					const entity = entities[i];
+					// push matrix uniform
+					uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
+					// push settings unifom
+					if (skinned){ // skinned settings
+						const animEntity = entity as AnimatedEntity;
 
-			renderInstManager.popTemplateRenderInst();
+						uniformOffset += animEntity.animatedObject.fillAnimationUniform(uniformData, uniformOffset, animEntity.animationController);
+
+						// set opacity to w field
+						uniformData[uniformOffset - 1] = entity.opacity;
+
+					} else { // basic settings
+						uniformOffset += fillVec4(uniformData, uniformOffset, 0, 0, 0,  entity.opacity);
+					}
+				}
+
+				// draw
+				for (const mesh of firstEntity.meshes){
+					mesh.prepareToRender(device, renderInstManager, viewerInput, cache, setCount);
+				}
+
+				renderInstManager.popTemplateRenderInst();
+			}
 		}
 			
         renderInstManager.popTemplateRenderInst();
