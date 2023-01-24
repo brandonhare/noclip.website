@@ -96,8 +96,8 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_CameraPos;
 	vec4 u_AmbientColour;
 	Light u_Lights[NUM_LIGHTS];
-	vec4 u_TimeVec; // x = time, yzw = unused
-	#define u_Time (u_TimeVec.x)
+	vec4 u_FogColour;
+	vec4 u_SceneParams; // x = time (unused), y = fogNear, z = fogFar, w = unused
 };
 
 struct InstanceData {
@@ -138,6 +138,7 @@ layout(location = ${Program.a_BoneIds}) in float a_BoneId;
 
 out vec4 v_Colour;
 out vec2 v_UV;
+out vec3 v_WorldPos;
 flat out int v_Id;
 
 
@@ -206,6 +207,7 @@ void main() {
 		uv += u_UVScroll.xy;
 	#endif
 
+	v_WorldPos = worldPos;
 	v_UV = uv;
 	v_Colour = colour;
     gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
@@ -213,6 +215,8 @@ void main() {
 `;
 	override frag = 
 `
+
+${GfxShaderLibrary.saturate}
 
 #ifdef TILEMAP
 	layout(binding=${Program.s_Texture}) uniform sampler2DArray u_TilemapTexture;
@@ -227,6 +231,7 @@ void main() {
 
 in vec4 v_Colour;
 in vec2 v_UV;
+in vec3 v_WorldPos;
 
 void main(){
 	vec4 colour = v_Colour;
@@ -264,6 +269,12 @@ void main(){
 		#endif // end ifdef tilemap
 	}
 	#endif
+
+	// fog
+	float depth = distance(v_WorldPos, u_CameraPos.xyz);
+	float scaledFogNear = u_SceneParams.y; // -fogNear / (fogFar - fogNear)
+	float fogScale = u_SceneParams.z; // 1 / (fogFar - fogNear)
+	colour.xyz = mix(colour.xyz, u_FogColour.xyz, saturate(depth * fogScale + scaledFogNear));
 
 	gl_FragColor = colour;
 }
@@ -733,15 +744,54 @@ export class AnimatedObject {
 
 
 export type SceneSettings = {
+	// colours
 	clearColour : GfxColor,
 	ambientColour : GfxColor,
-	fogColour? : GfxColor,
+
+	// lights
 	lightDirs : vec4[],
 	lightColours : GfxColor[],
+
+	// camera
 	cameraPos? : vec3, // initial camera posiiton
 	cameraTarget? : vec3, // initial camera look at (or zero)
-	// todo: fog
+
+	// fog
+	fogColour? : GfxColor,
+	fogNear? : number,
+	fogFar? : number,
+	showFog? : boolean,
+	fogScale? : number, // set dynamically by the ui panel
 };
+
+class ScenePanel extends UI.Panel {
+	fogCheckbox : UI.Checkbox;
+	settings : SceneSettings;
+	constructor(scene : SceneRenderer){
+		super();
+		this.settings = scene.sceneSettings;
+
+		this.setTitle(UI.RENDER_HACKS_ICON, "Render Hacks");
+
+		// fog settings
+		if (this.settings.fogNear !== undefined && this.settings.fogFar !== undefined){
+			this.fogCheckbox = new UI.Checkbox("Show Fog", this.settings.showFog);
+			this.fogCheckbox.onchanged = ()=>this.settings.showFog = this.fogCheckbox.checked;
+			this.contents.appendChild(this.fogCheckbox.elem);
+
+			const fogScale = new UI.Slider();
+			fogScale.setLabel("Fog Scale");
+			fogScale.setRange(0.1, 10);
+			fogScale.setValue(1);
+			fogScale.onvalue = (value)=>{
+				this.settings.fogScale = value;
+				this.settings.showFog = true;
+				this.fogCheckbox.setChecked(true);
+			}
+			this.contents.appendChild(fogScale.elem);
+		}
+	}
+}
 
 export class SceneRenderer implements Viewer.SceneGfx{
     renderHelper: GfxRenderHelper;
@@ -758,7 +808,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		this.cache = cache;
 		this.textureHolder = cache;
 		this.renderHelper = new GfxRenderHelper(device, context, cache);
-		this.sceneSettings = sceneSettings;
+		this.sceneSettings = {...sceneSettings};
 
 		cache.numLights = sceneSettings.lightColours.length;
 	}
@@ -766,6 +816,11 @@ export class SceneRenderer implements Viewer.SceneGfx{
 	getDefaultWorldMatrix(out : mat4){
 		if (this.sceneSettings.cameraPos)
 			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
+	}
+
+
+    createPanels() {
+		return [new ScenePanel(this)];
 	}
 
 	initEntities(device : GfxDevice, entities : Entity[]){
@@ -819,7 +874,8 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		
 		// set scene uniforms
 		const numLights = this.cache.numLights;
-		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 8*numLights + 4);
+		const settings = this.sceneSettings;
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_SceneParams, 4*4 + 4 + 4 + 4 + 8*numLights + 4);
 		const uniformData = renderInst.mapUniformBufferF32(Program.ub_SceneParams);
 		// camera matrix
 		uniformOffset += fillMatrix4x4(uniformData, uniformOffset, viewerInput.camera.clipFromWorldMatrix);
@@ -827,20 +883,29 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		const cameraPos = mat4.getTranslation([0,0,0], viewerInput.camera.worldMatrix);
 		uniformOffset += fillVec4(uniformData, uniformOffset, cameraPos[0], cameraPos[1], cameraPos[2], 1.0);
 		// ambient colour
-		uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.ambientColour);
+		uniformOffset += fillColor(uniformData, uniformOffset, settings.ambientColour);
 		for (let i = 0; i < numLights; ++i){
 			// light direction
-			uniformOffset += fillVec4v(uniformData, uniformOffset, this.sceneSettings.lightDirs[i]);
+			uniformOffset += fillVec4v(uniformData, uniformOffset, settings.lightDirs[i]);
 			// light colour
-			uniformOffset += fillColor(uniformData, uniformOffset, this.sceneSettings.lightColours[i]);
+			uniformOffset += fillColor(uniformData, uniformOffset, settings.lightColours[i]);
 		}
-		// time
+		// fog colour
+		uniformOffset += fillColor(uniformData, uniformOffset, settings.fogColour ?? this.sceneSettings.clearColour);
+		// time and other settings
 		const time = viewerInput.time * 0.001;
-		uniformData[uniformOffset++] = time;
-		// repeat for padding
-		uniformData[uniformOffset++] = time;
-		uniformData[uniformOffset++] = time;
-		uniformData[uniformOffset++] = time;
+		const fogEnabled = settings.showFog;
+		const fogScale = settings.fogScale ?? 1;
+		const fogNear = (settings.fogNear ?? Infinity) * fogScale;
+		const fogFar = (settings.fogFar ?? Infinity) * fogScale;
+
+		const fogInvRange = 1 / (fogFar - fogNear);
+		const fogNearScaled = -fogNear * fogInvRange;
+		uniformOffset += fillVec4(uniformData, uniformOffset,
+			time,
+			fogEnabled ? fogNearScaled : 0,
+			fogEnabled ? fogInvRange : 0,
+			0);
 
 		
 		// update and draw entitis

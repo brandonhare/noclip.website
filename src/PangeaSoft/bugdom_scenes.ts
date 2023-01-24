@@ -195,6 +195,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.35, 1, 0], [-0.2, -0.7, -0.1, 0]],
 			clearColour : {r : 0.352, g : 0.380, b : 1, a: 1},
 			fogColour : { r : 0.05, g : 0.25, b : 0.05, a : 1},
+			showFog : false, // todo
 		}
 	}, { // pond
 		type : BugdomLevelType.Pond,
@@ -208,6 +209,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.45, 1, 0], [-0.2, -0.7, -0.1, 0]],
 			clearColour : { r : 0.9, g : 0.9, b : 0.85, a : 1},
 			fogColour : { r : 0.9, g : 0.9, b : 0.85, a : 1},
+			showFog : false, // todo
 		}
 	}, { // forest
 		type : BugdomLevelType.Forest,
@@ -224,6 +226,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.15, 1, 0], [-0.2, -0.7, -0.1, 0]],
 			clearColour : { r : 1, g : 0.29, b : 0.063, a : 1},
 			fogColour : { r : 1, g : 0.29, b : 0.063, a : 1},
+			showFog : false, // todo
 		}
 	}, { // hive
 		type : BugdomLevelType.Hive,
@@ -240,6 +243,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.35, 1, 0], [-0.8, 1, -0.2, 0]],
 			clearColour : { r : 0.7, g : 0.6, b : 0.4, a : 1},
 			fogColour : { r : 0.7, g : 0.6, b : 0.4, a : 1},
+			showFog : false, // todo
 		}
 	}, { // night
 		type : BugdomLevelType.Night,
@@ -253,6 +257,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.35, 1, 0], [-0.2, -0.7, -0.1, 0]],
 			clearColour : { r : 0.02, g : 0.02, b : 0.08, a : 1},
 			fogColour : { r : 0.02, g : 0.02, b : 0.08, a : 1},
+			showFog : false, // todo
 		}
 	}, { // anthill
 		type : BugdomLevelType.Anthill,
@@ -269,6 +274,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 			lightDirs : [[0.4, -0.35, 1, 0], [-0.8, 1, -0.2, 0]],
 			clearColour : { r : 0.15, g : 0.07, b : 0.15, a : 1},
 			fogColour : { r : 0.15, g : 0.07, b : 0.15, a : 1},
+			showFog : false, // todo
 		}
 	}
 ]
