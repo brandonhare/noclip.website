@@ -278,7 +278,7 @@ const entityDefs : (BugdomEntityDef | null)[] = [
 	spawnStump,
 	{ meshGroup : "Global_Models1", meshId : 6, offset : [0, 30*3, 0], randomRot : true, scale : 3 }, // 52: rolling boulder
 	{ meshGroup : "Roach", meshId : "skel", anim : 0, scale : 1.7 }, // 53: roach enemy //todo shadow
-	{ meshGroup : "Skippy", meshId : "skel", anim : 0, scale : 0.7 }, // 54: ??
+	{ meshGroup : "Skippy", meshId : "skel", anim : 0, scale : 0.7 }, // 54: skippy
 	null, // 55: slime patch
 	null, // 56: lava patch
 	{ meshGroup : 0, meshId : 3, rot : (({param0})=>param0 * Math.PI / 2) }, // 57: bent ant paipe

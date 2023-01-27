@@ -1,7 +1,9 @@
+import { vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice";
 import { Endianness } from "../endian";
 import { AABB } from "../Geometry";
 import { GfxFormat, GfxTexFilterMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
+import { clamp } from "../MathHelpers";
 import { assert, assertExists } from "../util";
 
 import { ResourceFork } from "./AppleDouble";
@@ -12,45 +14,49 @@ import { convertTilemapId, createIndices, createNormalsFromHeightmap, createTile
 
 type SplineDef = {
 	numPoints: number;
-	points: Float32Array;
-	items: SplineItemDef[];
-	top: number;
-	left: number;
-	bottom: number;
-	right: number;
+	points: Float32Array; // x,z
+	aabb : AABB;
 };
 type FenceDef = {
+	mesh : Qd3DMesh,
 	type: number;
+	/*
 	numNubs: number;
 	nubs: Int32Array;
-	top: number;
-	left: number;
-	bottom: number;
-	right: number;
+	aabb : AABB;
+	*/
 };
-type SplineItemDef = {
+type SplineItemDef = LevelObjectDef & {
 	placement: number;
-	type: number;
-	param0: number;
-	param1: number;
-	param2: number;
-	param3: number;
-	flags: number;
+	spline : SplineDef;
 };
 
+export function getSplinePos(target : vec3, terrain : TerrainInfo, t : number, spline : SplineDef) : vec3{
+	const index = clamp(Math.floor(t * spline.numPoints), 0, spline.numPoints - 1);
+	let x = spline.points[index * 2];
+	let z = spline.points[index * 2 + 1];
+	let y = terrain.getHeight(x, z);
+	target[0] = x;
+	target[1] = y;
+	target[2] = z;
+	// todo: interpolation?
+	return target;
+}
+
+type FenceMesh = Qd3DMesh & { type : number };
 
 export type ParsedBugdomTerrain = {
 	meshes : Qd3DMesh[],
-	items : LevelObjectDef[],
+	items : (LevelObjectDef | SplineItemDef)[],
 	infos : TerrainInfo[],
 
 	splines : SplineDef[],
-	fences : FenceDef[],
+	fences : FenceMesh[],
 }
 
-export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boolean): ParsedBugdomTerrain {
+const MAP2UNIT_VALUE = 160/32;
 
-	const MAP2UNIT_VALUE = 160/32;
+export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boolean): ParsedBugdomTerrain {
 
 	function get(resourceName: string, id: number, debugName: string) {
 		return assertExists(terrainData.get(resourceName)?.get(id), debugName);
@@ -205,7 +211,8 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		};
 	}
 
-
+	const scratchVec : vec3 = [0,0,0];
+	const groundTerrainInfo = assertExists(infos[0], "no terrain info!");
 	// read splines
 	const splines: SplineDef[] = new Array(numSplines);
 	if (numSplines > 0) {
@@ -215,65 +222,72 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 			const numNubs = splineDefData.getUint16(i * 32);
 			const numPoints = splineDefData.getUint32(i * 32 + 8);
 			const numItems = splineDefData.getUint16(i * 32 + 16);
-			const top = splineDefData.getInt16(i * 32 + 24);
-			const left = splineDefData.getInt16(i * 32 + 26);
-			const bottom = splineDefData.getInt16(i * 32 + 28);
-			const right = splineDefData.getInt16(i * 32 + 30);
+			const top = splineDefData.getInt16(i * 32 + 24) * MAP2UNIT_VALUE;
+			const left = splineDefData.getInt16(i * 32 + 26) * MAP2UNIT_VALUE;
+			const bottom = splineDefData.getInt16(i * 32 + 28) * MAP2UNIT_VALUE;
+			const right = splineDefData.getInt16(i * 32 + 30) * MAP2UNIT_VALUE;
+			let minY = 0; // todo
+			let maxY = 0;
 
 			// read points
 			const points = numPoints > 0
 				? get("SpPt", 1000 + i, "spline points").createTypedArray(Float32Array, undefined, undefined, Endianness.BIG_ENDIAN)
 				: new Float32Array(0);
 
+			// adjust points
+			for (let i = 0; i < points.length; ++i)
+				points[i] *= MAP2UNIT_VALUE;
+
+
+			const spline : SplineDef = {
+				numPoints,
+				points,
+				aabb : new AABB(left, minY, bottom, right, maxY, top),
+			};
+			splines[i] = spline;
+
 			// read items
-			const items: SplineItemDef[] = new Array(numItems);
 			const itemData = getData("SpIt", 1000 + i, "spline items");
 			for (let j = 0; j < numItems; ++j) {
-				items[j] = {
-					placement: itemData.getFloat32(12 * j),
+				const placement = itemData.getFloat32(12 * j);
+				getSplinePos(scratchVec, groundTerrainInfo, placement, spline);
+				const item : SplineItemDef = {
+					x:scratchVec[0], y:scratchVec[1], z:scratchVec[2],
+					placement,
 					type: itemData.getUint16(12 * j + 4),
+					spline,
 					param0: itemData.getUint8(12 * j + 6),
 					param1: itemData.getUint8(12 * j + 7),
 					param2: itemData.getUint8(12 * j + 8),
 					param3: itemData.getUint8(12 * j + 9),
 					flags: itemData.getUint16(12 * j + 10)
 				};
+				items.push(item);
 			}
-
-			splines[i] = {
-				numPoints,
-				points,
-				items,
-				top, left, bottom, right
-			};
 		}
 	}
 
 	// read fences
 
-	const fences: FenceDef[] = new Array(numFences);
+	const fences: FenceMesh[] = new Array(numFences);
 	if (numFences > 0) {
 		const fenceData = getData("Fenc", 1000, "fences");
 		for (let i = 0; i < numFences; ++i) {
 			// read fence def
 			const type = fenceData.getUint16(i * 16);
 			const numNubs = fenceData.getInt16(i * 16 + 2);
-			const top = fenceData.getInt16(i * 16 + 8);
-			const left = fenceData.getInt16(i * 16 + 10);
-			const bottom = fenceData.getInt16(i * 16 + 12);
-			const right = fenceData.getInt16(i * 16 + 14);
+			const top = fenceData.getInt16(i * 16 + 8) * MAP2UNIT_VALUE;
+			const left = fenceData.getInt16(i * 16 + 10) * MAP2UNIT_VALUE;
+			const bottom = fenceData.getInt16(i * 16 + 12) * MAP2UNIT_VALUE;
+			const right = fenceData.getInt16(i * 16 + 14) * MAP2UNIT_VALUE;
+
+			const aabb = new AABB(left, Infinity, bottom, right, -Infinity, top);
 
 			// read fence nubs
 			const nubs = get("FnNb", 1000 + i, "fence nubs").createTypedArray(Int32Array, undefined, 2 * numNubs, Endianness.BIG_ENDIAN);
-			fences[i] = {
-				type,
-				numNubs,
-				nubs,
-				top,
-				left,
-				bottom,
-				right
-			};
+
+			// create fence
+			fences[i] = createFence(infos, type, numNubs, nubs, aabb);
 		}
 	}
 
@@ -284,5 +298,124 @@ export function parseBugdomTerrain(terrainData: ResourceFork, hasCeiling : boole
 		splines,
 		fences,
 		infos,
+	};
+}
+
+const fenceHeights = [600, 1000, 1000, 500, 1000, 2000, -200, 6000, 1200];
+const fenceTextureWidths = [1/600, 1/500, 1/500, 1/500, 1/500, 1/500, 1/500, 1/1000, 1/1200];
+
+function createFence(terrainInfos : TerrainInfo[], type : number, numNubs : number, nubs : Int32Array, aabb : AABB) : FenceMesh{
+
+	const numTriangles = numNubs * 2 - 2;
+	const numVertices = numNubs * 2;
+	const numIndices = numTriangles * 3;
+
+	const hasNormals = type === 6;
+
+	const indices = (numVertices <= 0x10000) ? new Uint16Array(numIndices)
+		: new Uint32Array(numIndices);
+	const vertices = new Float32Array(numVertices * 3);
+	const UVs = new Float32Array(numVertices * 2);
+	const normals = hasNormals ? new Float32Array(numVertices * 3) : undefined;
+
+	const floorInfo = terrainInfos[0];
+	const ceilingInfo = terrainInfos[1];
+
+	const height = fenceHeights[type];
+	const textureWidth = fenceTextureWidths[type];
+
+	const fenceSink = 40;
+
+	let u = 0;
+
+	for (let i = 0; i < numNubs; ++i){
+		// indices
+		indices[i * 6 + 0] = i*2 + 1;
+		indices[i * 6 + 1] = i*2 + 0;
+		indices[i * 6 + 2] = i*2 + 3;
+		indices[i * 6 + 3] = i*2 + 3;
+		indices[i * 6 + 4] = i*2 + 0;
+		indices[i * 6 + 5] = i*2 + 2;
+
+		// vertices
+		const x = nubs[i * 2    ] * MAP2UNIT_VALUE;
+		const z = nubs[i * 2 + 1] * MAP2UNIT_VALUE;
+		let y = 0;
+		let y2 = 0;
+		switch(type){
+			case 6: // moss
+				y = ceilingInfo.getHeight(x, z) + fenceSink;
+				y2 = y + height;
+				break;
+			case 7: // wood
+				y = -400;
+				y2 = y + height;
+				break;
+			case 8: // hive
+				y = floorInfo.getHeight(x,z) - fenceSink;
+				y2 = ceilingInfo.getHeight(x,z) + fenceSink;
+				break;
+			default:
+				y = floorInfo.getHeight(x, z) - fenceSink;
+				y2 = y + height;
+				break;
+		}
+		vertices[i * 3    ] = x;
+		vertices[i * 3 + 1] = y;
+		vertices[i * 3 + 2] = z;
+		vertices[i * 3 + 3] = x;
+		vertices[i * 3 + 4] = y2;
+		vertices[i * 3 + 5] = z;
+
+		// aabb
+		if (y < aabb.minY) aabb.minY = y;
+		if (y2 > aabb.maxY) aabb.maxY = y2;
+
+		// uvs
+		if (i > 0){
+			u += Math.hypot(x - vertices[i*3-6], y - vertices[i*3-5], z - vertices[i*3-4]) * textureWidth;
+		}
+		UVs[i*4 + 0] = u;
+		UVs[i*4 + 1] = 1;
+		UVs[i*4 + 2] = u;
+		UVs[i*4 + 3] = 0;
+
+		if (hasNormals && i < numNubs - 1){
+			// negated/flipped
+			const dz = x - nubs[i*2+2] * MAP2UNIT_VALUE;
+			const dx = z - nubs[i*2+3] * MAP2UNIT_VALUE;
+			// add to bottom 2 verts of this face
+			normals![i*6+0] += dx;
+			normals![i*6+2] += dz;
+			normals![i*6+6] += dx;
+			normals![i*6+8] += dz;
+		}
+	}
+
+	if (hasNormals){
+		// normalize normal sums
+		for (let i = 0; i < numVertices; i += 2){
+			const scale = 1 / Math.hypot(normals![i*3], normals![i*3+2]);
+			normals![i*3] *= scale;
+			normals![i*3+2] *= scale;
+			// copy to above two verts
+			normals![i*3+3] = normals![i*3];
+			normals![i*3+5] = normals![i*3+2];
+		}
+	}
+
+
+ 	return {
+		numTriangles,
+		numVertices,
+		aabb,
+		colour : {r:1,g:1,b:1,a:1},
+		texture : undefined, // set by calling code
+		type,
+	
+		indices,
+		vertices,
+		UVs,
+		normals,
 	};
 }

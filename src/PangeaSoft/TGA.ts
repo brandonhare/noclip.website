@@ -5,14 +5,14 @@ import { assert, readString } from "../util";
 export type TGATexture = {
 	width : number,
 	height : number,
-	pixels : Uint8Array,
+	pixels : Uint8Array | Uint16Array,
 	pixelFormat : GfxFormat,
 }
 
 export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 
 	const footerMagic = readString(buffer, buffer.byteLength - 18, 18, false);
-	assert(footerMagic === "TRUEVISION-XFILE.\0", "not a TGA file!");
+	//assert(footerMagic === "TRUEVISION-XFILE.\0", "not a TGA file!"); // not always present
 
 	const data = buffer.createDataView();
 
@@ -215,7 +215,7 @@ export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 	return {
 		width,
 		height,
-		pixels,
+		pixels : bytesPerPixel === 2 ? new Uint16Array(pixels.buffer) : pixels,
 		pixelFormat
 	}
 }

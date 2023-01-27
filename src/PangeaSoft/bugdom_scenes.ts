@@ -2,16 +2,19 @@ import * as Viewer from '../viewer';
 
 import { vec4 } from "gl-matrix";
 import { colorScale } from "../Color";
-import { GfxDevice } from "../gfx/platform/GfxPlatform";
+import { GfxDevice, GfxFormat, GfxFrontFaceMode, GfxWrapMode } from "../gfx/platform/GfxPlatform";
 import { SceneContext } from "../SceneBase";
 
 import { parseAppleDouble } from "./AppleDouble";
 import { BugdomLevelType, BugdomModelFriendlyNames, BugdomProcessedAssets, ModelSetNames, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
 import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
-import { parseQd3DMeshGroup, Qd3DMesh } from "./QuickDraw3D";
-import { AnimatedObject, Cache, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
+import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
+import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
+import { loadTextureFromTGA, TGATexture } from "./TGA";
+import { assert, assertExists } from "../util";
+import ArrayBufferSlice from "../ArrayBufferSlice";
 
 const pathBase = "bugdom";
 
@@ -41,6 +44,14 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			terrainEntity.scale[2] = terrainInfo.xzScale;
 			terrainEntity.updateMatrix();
 			entities.push(terrainEntity);
+		}
+		// create fences
+		const fences = assets.terrain?.fences;
+		if (fences){
+			for (let i = 0; i < fences.length; ++i){
+				const fenceEntity = new Entity(this.processedAssets.models.fences[i], [0,0,0], 0, 1, false);
+				entities.push(fenceEntity);
+			}
 		}
 
 		// create entities
@@ -72,6 +83,12 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			this.processedAssets.terrain = rawAssets.terrain.meshes.map((mesh)=>
 				new StaticObject(device, cache, mesh, "Terrain")
 			);
+			// create fences
+			this.processedAssets.models.fences = rawAssets.terrain.fences.map((fence)=>{
+				const fenceMesh = new StaticObject(device, cache, fence, "Fence");
+				fenceMesh.renderFlags |= RenderFlags.KeepBackfaces;
+				return [fenceMesh];
+			});
 		}
 		
 		for (const modelSetName of Object.keys(rawAssets.models)){
@@ -87,13 +104,72 @@ export class BugdomSceneRenderer extends SceneRenderer {
 			this.processedAssets.skeletons[skeletonName] = new AnimatedObject(device, cache, skeleton, BugdomModelFriendlyNames, skeletonName);
 		}
 
+
 		if (cache.onnewtextures)
 			cache.onnewtextures();
 	}
 }
 
 
+function createFenceTexture(data : ArrayBufferSlice) : Qd3DTexture{
+	const tex = loadTextureFromTGA(data);
+	if (tex.pixelFormat === GfxFormat.U16_RGB_565){
+		const count = tex.width * tex.height;
+		for (let i = 0; i < count; ++i){
+			let pixel = tex.pixels[i];
 
+			// drop the lsb of the green channel and shift blue over
+			let destPixel = (pixel & 0xFFC0) | ((pixel << 1) & 0x3E);
+			// set alpha
+			if (destPixel) destPixel |= 1;
+
+			destPixel = pixel;
+
+			tex.pixels[i] = destPixel;
+		}
+		// todo: dont drop green bit
+	} else {
+		assert(false, "Invalid pixel format");
+	}
+	/*
+	const packed = tex.pixelFormat === GfxFormat.U16_RGB_565;
+	assert(packed || tex.pixelFormat === GfxFormat.U8_RGB_NORM, "Invalid input format " + GfxFormat[tex.pixelFormat]);
+	const pixels = new Uint8Array(tex.width * tex.height * 4);
+	const destStride = tex.width * 4;
+	// make black pixels transparent
+	if (packed){
+		const srcStride = tex.width;
+		for (let row = 0; row < tex.height; ++row){
+			for (let col = 0; col < tex.width; ++col){
+				const value = tex.pixels[row * srcStride + col];
+
+			}
+		}
+		console.log(tex);
+	} else {
+		const srcStride = tex.width * 3;
+		for (let row = 0; row < tex.height; ++row){
+			for (let col = 0; col < tex.width; ++col){
+				let sum = 0;
+				for (let k = 0; k < 3; ++k){
+					const value = tex.pixels[row * srcStride + col * 3 + k];
+					sum += value;
+					pixels[row * destStride + col * 4 + k] = value;
+				}
+				pixels[row * destStride + col * 4 + 3] = sum ? 255 : 0;
+			}
+		}
+	}*/
+	const result : Qd3DTexture = {
+		...tex,
+		pixelFormat : GfxFormat.U16_RGBA_5551,
+		alpha : AlphaType.OneBitAlpha,
+		numTextures : 1,
+		wrapU : GfxWrapMode.Repeat,
+		wrapV : GfxWrapMode.Clamp,
+	};
+	return result
+}
 
 class BugdomSceneDesc implements Viewer.SceneDesc {
 	id : string;
@@ -125,6 +201,16 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 			]).then(([model, skeletonData])=>parseSkeleton(model, skeletonData))
 		) ?? []);
 
+		const fenceTexturesTypeArray = new Array<number|undefined>(9);
+		for (const type of this.def.fenceTextureIds)
+			fenceTexturesTypeArray[type] = type;
+
+		const fenceTexturePromises = Promise.all(fenceTexturesTypeArray.map((type)=>
+			(type !== undefined) ? context.dataFetcher.fetchData(`${pathBase}/Images/Textures/${type+2000}.tga`)
+					.then(createFenceTexture)
+				: undefined
+		));
+
 		const terrainPromise = scene.terrain
 			? context.dataFetcher.fetchData(`${pathBase}/Terrain/${scene.terrain}.ter.rsrc`)
 				.then((data)=>parseBugdomTerrain(parseAppleDouble(data), this.def.hasCeiling))
@@ -133,6 +219,12 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 		const models = await modelPromises;
 		const skeletons = await skeletonPromises;
 		const terrain : ParsedBugdomTerrain = await terrainPromise;
+		
+		const fenceTextures = await fenceTexturePromises;
+		// fixup terrain fence textures
+		for (const fence of terrain.fences){
+			fence.texture = assertExists(fenceTextures[fence.type], "missing fence texture " + fence.type);
+		}
 
 		let objects : LevelObjectDef[] = terrain.items;
 
@@ -148,7 +240,7 @@ class BugdomSceneDesc implements Viewer.SceneDesc {
 		const rawAssets : BugdomRawAssets = {
 			models : {},
 			skeletons : {},
-			terrain
+			terrain,
 		};
 		for (let i = 0; i < (this.def.models?.length ?? 0); ++i){
 			const name = this.def.models![i];
@@ -174,6 +266,7 @@ type BugdomSceneDef = {
 type BugdomLevelTypeDef = {
 	type : BugdomLevelType,
 	hasCeiling : boolean,
+	fenceTextureIds : number[],
 	models : (typeof ModelSetNames[number])[],
 	skeletons : (typeof SkeletonNames[number])[],
 	scenes : BugdomSceneDef[],
@@ -183,6 +276,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	{ // lawn
 		type : BugdomLevelType.Lawn,
 		hasCeiling : false,
+		fenceTextureIds : [0,2],
 		models : ["Lawn_Models1", "Lawn_Models2"],
 		skeletons : ["BoxerFly", "Slug", "Ant"],
 		scenes : [
@@ -200,6 +294,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	}, { // pond
 		type : BugdomLevelType.Pond,
 		hasCeiling : false,
+		fenceTextureIds : [2,5],
 		models : ["Pond_Models"],
 		skeletons : ["Mosquito", "WaterBug", "PondFish", "Skippy", "Slug"],
 		scenes : [{ id : "pond", name : "Pond", terrain : "Pond" }],
@@ -214,6 +309,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	}, { // forest
 		type : BugdomLevelType.Forest,
 		hasCeiling : false,
+		fenceTextureIds : [1,3,7],
 		models : ["Forest_Models"],
 		skeletons : ["DragonFly", "Foot", "Spider", "Caterpillar", "Bat", "FlyingBee", "Ant"],
 		scenes : [
@@ -231,6 +327,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	}, { // hive
 		type : BugdomLevelType.Hive,
 		hasCeiling : true,
+		fenceTextureIds : [8],
 		models : ["BeeHive_Models"],
 		skeletons : ["Larva", "FlyingBee", "WorkerBee", "QueenBee"],
 		scenes : [
@@ -248,6 +345,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	}, { // night
 		type : BugdomLevelType.Night,
 		hasCeiling : false,
+		fenceTextureIds : [4],
 		models : ["Night_Models"],
 		skeletons : ["WingedFireAnt", "FireFly", "Caterpillar", "Slug", "Roach", "Ant"],
 		scenes : [{ id : "night", name : "Night", terrain : "Night" }],
@@ -262,6 +360,7 @@ const bugdomSceneDefs : BugdomLevelTypeDef[] = [
 	}, { // anthill
 		type : BugdomLevelType.Anthill,
 		hasCeiling : true,
+		fenceTextureIds : [6],
 		models : ["AntHill_Models"],
 		skeletons : ["AntKing", "Slug", "Ant", "WingedFireAnt", "RootSwing", "Roach"],
 		scenes : [
