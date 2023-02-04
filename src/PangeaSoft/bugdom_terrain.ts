@@ -17,15 +17,6 @@ type SplineDef = {
 	points: Float32Array; // x,z
 	aabb : AABB;
 };
-type FenceDef = {
-	mesh : Qd3DMesh,
-	type: number;
-	/*
-	numNubs: number;
-	nubs: Int32Array;
-	aabb : AABB;
-	*/
-};
 type SplineItemDef = LevelObjectDef & {
 	placement: number;
 	spline : SplineDef;
@@ -328,57 +319,54 @@ function createFence(terrainInfos : TerrainInfo[], type : number, numNubs : numb
 
 	let u = 0;
 
+	const lastPos : vec3 = [0,0,0];
 	for (let i = 0; i < numNubs; ++i){
-		// indices
-		indices[i * 6 + 0] = i*2 + 1;
-		indices[i * 6 + 1] = i*2 + 0;
-		indices[i * 6 + 2] = i*2 + 3;
-		indices[i * 6 + 3] = i*2 + 3;
-		indices[i * 6 + 4] = i*2 + 0;
-		indices[i * 6 + 5] = i*2 + 2;
-
 		// vertices
 		const x = nubs[i * 2    ] * MAP2UNIT_VALUE;
 		const z = nubs[i * 2 + 1] * MAP2UNIT_VALUE;
-		let y = 0;
+		let y1 = 0;
 		let y2 = 0;
 		switch(type){
 			case 6: // moss
-				y = ceilingInfo.getHeight(x, z) + fenceSink;
-				y2 = y + height;
+				y1 = ceilingInfo.getHeight(x, z) + fenceSink;
+				y2 = y1 + height;
 				break;
 			case 7: // wood
-				y = -400;
-				y2 = y + height;
+				y1 = -400;
+				y2 = y1 + height;
 				break;
 			case 8: // hive
-				y = floorInfo.getHeight(x,z) - fenceSink;
+				y1 = floorInfo.getHeight(x,z) - fenceSink;
 				y2 = ceilingInfo.getHeight(x,z) + fenceSink;
 				break;
 			default:
-				y = floorInfo.getHeight(x, z) - fenceSink;
-				y2 = y + height;
+				y1 = floorInfo.getHeight(x, z) - fenceSink;
+				y2 = y1 + height;
 				break;
 		}
-		vertices[i * 3    ] = x;
-		vertices[i * 3 + 1] = y;
-		vertices[i * 3 + 2] = z;
-		vertices[i * 3 + 3] = x;
-		vertices[i * 3 + 4] = y2;
-		vertices[i * 3 + 5] = z;
+		vertices[i * 6 + 0] = x;
+		vertices[i * 6 + 1] = y1;
+		vertices[i * 6 + 2] = z;
+		vertices[i * 6 + 3] = x;
+		vertices[i * 6 + 4] = y2;
+		vertices[i * 6 + 5] = z;
 
 		// aabb
-		if (y < aabb.minY) aabb.minY = y;
+		if (y1 < aabb.minY) aabb.minY = y1;
 		if (y2 > aabb.maxY) aabb.maxY = y2;
 
 		// uvs
 		if (i > 0){
-			u += Math.hypot(x - vertices[i*3-6], y - vertices[i*3-5], z - vertices[i*3-4]) * textureWidth;
+			u += Math.hypot(x - lastPos[0], y1 - lastPos[1], z - lastPos[2]) * textureWidth;
 		}
 		UVs[i*4 + 0] = u;
 		UVs[i*4 + 1] = 1;
 		UVs[i*4 + 2] = u;
 		UVs[i*4 + 3] = 0;
+
+		lastPos[0] = x;
+		lastPos[1] = y1;
+		lastPos[2] = z;
 
 		if (hasNormals && i < numNubs - 1){
 			// negated/flipped
@@ -392,15 +380,26 @@ function createFence(terrainInfos : TerrainInfo[], type : number, numNubs : numb
 		}
 	}
 
+	// indices
+	for (let i = 0; i < numNubs - 1; ++i){
+		const base = i*2;
+		indices[i*6+0] = base+1;
+		indices[i*6+1] = base+3;
+		indices[i*6+2] = base;
+		indices[i*6+3] = base+3;
+		indices[i*6+4] = base+2;
+		indices[i*6+5] = base;
+	}
+
 	if (hasNormals){
 		// normalize normal sums
 		for (let i = 0; i < numVertices; i += 2){
 			const scale = 1 / Math.hypot(normals![i*3], normals![i*3+2]);
-			normals![i*3] *= scale;
-			normals![i*3+2] *= scale;
+			normals![i*6] *= scale;
+			normals![i*6+2] *= scale;
 			// copy to above two verts
-			normals![i*3+3] = normals![i*3];
-			normals![i*3+5] = normals![i*3+2];
+			normals![i*6+3] = normals![i*6];
+			normals![i*6+5] = normals![i*6+2];
 		}
 	}
 

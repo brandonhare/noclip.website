@@ -11,7 +11,7 @@ export type TGATexture = {
 
 export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 
-	const footerMagic = readString(buffer, buffer.byteLength - 18, 18, false);
+	//const footerMagic = readString(buffer, buffer.byteLength - 18, 18, false);
 	//assert(footerMagic === "TRUEVISION-XFILE.\0", "not a TGA file!"); // not always present
 
 	const data = buffer.createDataView();
@@ -101,7 +101,7 @@ export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 		}
 	}
 
-	const pixelFormat = choosePixelFormat(greyscale, alphaChannelDepth, bytesPerPixel);
+	let pixelFormat = choosePixelFormat(greyscale, alphaChannelDepth, bytesPerPixel);
 	assert(pixelFormat !== false, "Unsupported TGA pixel format");
 
 	const colourMapDataStart = 18 + idLength;
@@ -123,7 +123,7 @@ export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 	// read pixels
 	const numPixels = width * height;
 	const numPixelBytes = numPixels * bytesPerPixel;
-	let pixels : Uint8Array;
+	let pixels : Uint8Array | Uint16Array;
 	let offset = imageDataStart;
 	if (!usesRLE){
 		if (!usesColourMap){
@@ -196,12 +196,22 @@ export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 		}
 	}
 
+	
 	// swizzle
-	if (bytesPerPixel === 2){ 
-		for (let i = 0; i < numPixelBytes; i += 2){
-			const value = pixels[i];
-			pixels[i] = pixels[i+1];
-			pixels[i+1] = value;
+	if (bytesPerPixel === 2){
+		pixels = new Uint16Array(pixels.buffer);
+		if (pixelFormat === GfxFormat.U16_RGB_565){
+			pixelFormat = GfxFormat.U16_RGBA_5551;
+			for (let i = 0; i < pixels.length; ++i){
+				const p = pixels[i];
+				pixels[i] = (p << 1) | 1;
+			}
+		} else {
+			for (let i = 0; i < numPixelBytes; i += 2){
+				const value = pixels[i];
+				pixels[i] = pixels[i+1];
+				pixels[i+1] = value;
+			}
 		}
 	} else if (bytesPerPixel === 3 || bytesPerPixel === 4) {
 		// BGR or BGRA
@@ -211,11 +221,12 @@ export function loadTextureFromTGA(buffer : ArrayBufferSlice) : TGATexture {
 			pixels[i+2] = b;
 		}
 	}
+	
 
 	return {
 		width,
 		height,
-		pixels : bytesPerPixel === 2 ? new Uint16Array(pixels.buffer) : pixels,
+		pixels,
 		pixelFormat
 	}
 }

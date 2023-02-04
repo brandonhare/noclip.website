@@ -51,7 +51,7 @@ export function swizzle1555Pixels(pixels : Uint16Array, preserveAlpha = true){
 	}
 }
 // duplicate pixel colours into adjacent transparent pixels to improve bilinear filtering clipping artifacts
-function addEdgePadding(pixels : Uint16Array, width : number, height : number){
+export function addEdgePadding(pixels : Uint16Array, width : number, height : number){
 	// left-right
 	for (let row = 0; row < height; ++row){
 		for (let col = 0; col < width; ++col){

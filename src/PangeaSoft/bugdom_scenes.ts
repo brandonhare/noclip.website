@@ -9,7 +9,7 @@ import { parseAppleDouble } from "./AppleDouble";
 import { BugdomLevelType, BugdomModelFriendlyNames, BugdomProcessedAssets, ModelSetNames, SkeletonNames, spawnBugdomEntity } from "./bugdom_entities";
 import { parseBugdomTerrain, ParsedBugdomTerrain } from "./bugdom_terrain";
 import { Assets, Entity, getFriendlyName, LevelObjectDef } from "./entity";
-import { AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
+import { addEdgePadding, AlphaType, parseQd3DMeshGroup, Qd3DMesh, Qd3DTexture } from "./QuickDraw3D";
 import { AnimatedObject, Cache, RenderFlags, SceneRenderer, SceneSettings, StaticObject } from "./renderer";
 import { parseSkeleton, SkeletalMesh } from "./skeleton";
 import { loadTextureFromTGA, TGATexture } from "./TGA";
@@ -113,62 +113,27 @@ export class BugdomSceneRenderer extends SceneRenderer {
 
 function createFenceTexture(data : ArrayBufferSlice) : Qd3DTexture{
 	const tex = loadTextureFromTGA(data);
-	if (tex.pixelFormat === GfxFormat.U16_RGB_565){
-		const count = tex.width * tex.height;
-		for (let i = 0; i < count; ++i){
-			let pixel = tex.pixels[i];
 
-			// drop the lsb of the green channel and shift blue over
-			let destPixel = (pixel & 0xFFC0) | ((pixel << 1) & 0x3E);
-			// set alpha
-			if (destPixel) destPixel |= 1;
-
-			destPixel = pixel;
-
-			tex.pixels[i] = destPixel;
-		}
-		// todo: dont drop green bit
-	} else {
-		assert(false, "Invalid pixel format");
-	}
-	/*
-	const packed = tex.pixelFormat === GfxFormat.U16_RGB_565;
-	assert(packed || tex.pixelFormat === GfxFormat.U8_RGB_NORM, "Invalid input format " + GfxFormat[tex.pixelFormat]);
-	const pixels = new Uint8Array(tex.width * tex.height * 4);
-	const destStride = tex.width * 4;
-	// make black pixels transparent
-	if (packed){
-		const srcStride = tex.width;
+	if (tex.pixelFormat === GfxFormat.U16_RGBA_5551){
 		for (let row = 0; row < tex.height; ++row){
 			for (let col = 0; col < tex.width; ++col){
-				const value = tex.pixels[row * srcStride + col];
-
-			}
-		}
-		console.log(tex);
-	} else {
-		const srcStride = tex.width * 3;
-		for (let row = 0; row < tex.height; ++row){
-			for (let col = 0; col < tex.width; ++col){
-				let sum = 0;
-				for (let k = 0; k < 3; ++k){
-					const value = tex.pixels[row * srcStride + col * 3 + k];
-					sum += value;
-					pixels[row * destStride + col * 4 + k] = value;
+				const index = row * tex.width + col;
+				const p = tex.pixels[index];
+				if ((p & 0xFFFE) === 0){
+					tex.pixels[index] = 0;
 				}
-				pixels[row * destStride + col * 4 + 3] = sum ? 255 : 0;
 			}
 		}
-	}*/
-	const result : Qd3DTexture = {
+		addEdgePadding(tex.pixels as Uint16Array, tex.width, tex.height);
+	}
+
+	return {
 		...tex,
-		pixelFormat : GfxFormat.U16_RGBA_5551,
 		alpha : AlphaType.OneBitAlpha,
 		numTextures : 1,
 		wrapU : GfxWrapMode.Repeat,
 		wrapV : GfxWrapMode.Clamp,
 	};
-	return result
 }
 
 class BugdomSceneDesc implements Viewer.SceneDesc {
