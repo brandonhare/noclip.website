@@ -17,14 +17,14 @@ import { GfxBuffer, GfxInputLayout, GfxInputState, GfxProgram, GfxTexture } from
 import { GfxRenderCache } from "../gfx/render/GfxRenderCache";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper";
-import { GfxRendererLayer, GfxRenderInstManager, makeSortKey, setSortKeyDepth } from "../gfx/render/GfxRenderInstManager";
-import { computeNormalMatrix, Vec3UnitY, Vec3Zero } from "../MathHelpers";
+import { GfxRendererLayer, GfxRenderInstManager, makeSortKey } from "../gfx/render/GfxRenderInstManager";
+import { Vec3UnitY, Vec3Zero } from "../MathHelpers";
 import { DeviceProgram } from "../Program";
 import { Destroyable, SceneContext } from "../SceneBase";
 import { TextureMapping } from "../TextureHolder";
-import { assert, assertExists } from "../util";
+import { assert } from "../util";
 
-import { AnimatedEntity, Entity, EntityUpdateResult, FriendlyNames, getFriendlyName } from "./entity";
+import { AnimatedEntity, Entity, FriendlyNames, getFriendlyName } from "./entity";
 import { AlphaType, Qd3DMesh, Qd3DTexture, textureArrayToCanvas } from "./QuickDraw3D";
 import { AnimationController, AnimationData, calculateAnimationTransforms, SkeletalMesh } from "./skeleton";
 
@@ -32,8 +32,7 @@ import { AnimationController, AnimationData, calculateAnimationTransforms, Skele
 const enum Settings {
 	AnimationTextureFps = 30,
 	DefaultTexFilter = GfxTexFilterMode.Bilinear,
-	MaxInstances = 64,
-	MinInstances = 4,
+	MaxInstances = 4096,
 };
 
 
@@ -61,17 +60,12 @@ export class Program extends DeviceProgram {
 	static readonly a_BoneIds = 5;
 
 	static readonly ub_SceneParams = 0;
-	static readonly ub_InstanceParams = 1;
-	static readonly ub_MeshParams = 2;
+	static readonly ub_MeshParams = 1;
 
-	static readonly s_Texture = 0;
-	static readonly s_AnimTexture = 1;
-
-	constructor(flags : RenderFlags, numLights : number, maxInstances : number){
+	constructor(flags : RenderFlags, numLights : number){
 		super();
 
 		this.setDefineString("NUM_LIGHTS", numLights.toString());
-		this.setDefineString("MAX_INSTANCES", maxInstances.toString());
 
 		this.setDefineBool("UNLIT", (flags & RenderFlags.Unlit) !== 0);
 		this.setDefineBool("HAS_VERTEX_COLOURS", (flags & RenderFlags.HasVertexColours) !== 0);
@@ -84,7 +78,7 @@ export class Program extends DeviceProgram {
 		this.setDefineBool("REFLECTIVE", (flags & RenderFlags.Reflective) !== 0);
 	}
 
-	override both = 
+	override both =
 `
 struct Light {
 	vec4 direction;
@@ -100,30 +94,33 @@ layout(std140) uniform ub_SceneParams {
 	vec4 u_SceneParams; // x = time (unused), y = fogNear, z = fogFar, w = unused
 };
 
-struct InstanceData {
-	Mat4x3 ui_WorldFromModelMatrix;
-	vec4 ui_Params; // x = anim time, y = anim texture width; w = opacity
-};
-layout(std140) uniform InstanceParams {
-	InstanceData ub_InstanceParams[MAX_INSTANCES];
-
-	#define u_WorldFromModelMatrix ub_InstanceParams[gl_InstanceID].ui_WorldFromModelMatrix
-	#define u_Params ub_InstanceParams[gl_InstanceID].ui_Params
-};
-
-#if defined(HAS_MESH_COLOUR) || defined(SCROLL_UVS)
 layout(std140) uniform ub_MeshParams {
+	vec4 u_MeshParams; // x = instanceOffset, y = unused, zw = uv
+
 	#ifdef HAS_MESH_COLOUR
 		vec4 u_MeshColour;
 	#endif
-
-	#ifdef SCROLL_UVS
-		vec4 u_UVScroll; // xy = uv, zw = unused
-	#endif
 };
+
+
+layout(binding=0) uniform sampler2D u_InstanceTexture;
+
+#ifdef HAS_TEXTURE
+	#ifndef TILEMAP
+		layout(binding=1) uniform sampler2D u_Texture;
+	#else
+		precision lowp sampler2DArray;
+		precision mediump float;
+		layout(binding=1) uniform sampler2DArray u_TilemapTexture;
+	#endif
 #endif
+
+#ifdef SKINNED
+	layout(binding=2) uniform sampler2D u_AnimTexture;
+#endif
+
 `;
-	override vert = 
+	override vert =
 `
 layout(location = ${Program.a_Position}) in vec3 a_Position;
 layout(location = ${Program.a_UVs}) in vec2 a_UV;
@@ -132,9 +129,7 @@ layout(location = ${Program.a_Colours}) in vec3 a_Colour;
 layout(location = ${Program.a_TextureIds}) in float a_TextureId;
 layout(location = ${Program.a_BoneIds}) in float a_BoneId;
 
-#ifdef SKINNED
-	layout(binding=${Program.s_AnimTexture}) uniform sampler2D u_AnimTexture;
-#endif
+
 
 out vec4 v_Colour;
 out vec2 v_UV;
@@ -142,9 +137,22 @@ out vec3 v_WorldPos;
 flat out int v_Id;
 
 
+void getInstanceParams(out Mat4x3 mat, out vec4 params){
+	int row = gl_InstanceID + int(u_MeshParams.x);
+	mat.mx = texelFetch(SAMPLER_2D(u_InstanceTexture), ivec2(0, row), 0);
+	mat.my = texelFetch(SAMPLER_2D(u_InstanceTexture), ivec2(1, row), 0);
+	mat.mz = texelFetch(SAMPLER_2D(u_InstanceTexture), ivec2(2, row), 0);
+	params = texelFetch(SAMPLER_2D(u_InstanceTexture), ivec2(3, row), 0);
+}
+
+
 ${GfxShaderLibrary.MulNormalMatrix}
 
 void main() {
+
+	Mat4x3 u_WorldFromModelMatrix;
+	vec4 u_Params; // x = anim time, y = anim texture width; z = unused, w = opacity
+	getInstanceParams(u_WorldFromModelMatrix, u_Params);
 
 	vec3 localPos = a_Position;
 	vec3 localNormal = a_Normal;
@@ -180,7 +188,7 @@ void main() {
 		localNormal = Mul(boneMat, vec4(localNormal, 0.0));
 	}
 	#endif
-	
+
 	vec3 worldPos = Mul(u_WorldFromModelMatrix, vec4(localPos, 1.0));
 	vec3 worldNormal = normalize(MulNormalMatrix(u_WorldFromModelMatrix, localNormal));
 
@@ -204,29 +212,22 @@ void main() {
 	#endif
 
 	#ifdef SCROLL_UVS
-		uv += u_UVScroll.xy;
+		uv += u_MeshParams.zw;
 	#endif
 
 	v_WorldPos = worldPos;
 	v_UV = uv;
 	v_Colour = colour;
-    gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
+	gl_Position = Mul(u_ClipFromWorldMatrix, vec4(worldPos,1.0));
 }
 `;
-	override frag = 
+	override frag =
 `
 
 ${GfxShaderLibrary.saturate}
 
 #ifdef TILEMAP
-	layout(binding=${Program.s_Texture}) uniform sampler2DArray u_TilemapTexture;
-	precision mediump float;
-	precision lowp sampler2DArray;
 	flat in int v_Id;
-#else
-	#ifdef HAS_TEXTURE
-		layout(binding=${Program.s_Texture}) uniform sampler2D u_Texture;
-	#endif
 #endif
 
 in vec4 v_Colour;
@@ -236,7 +237,7 @@ in vec3 v_WorldPos;
 void main(){
 	vec4 colour = v_Colour;
 	vec2 uv = v_UV;
-	
+
 	#ifdef HAS_TEXTURE
 	{
 		#ifndef TILEMAP
@@ -293,27 +294,21 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 
 	programs = new Map<RenderFlags, GfxProgram>();
 
+	instanceTexture : TextureMapping;
+	instanceBuffer : Float32Array;
+
 	numLights = 1;
 
 	viewerTextures : Viewer.Texture[] = [];
 	onnewtextures: (() => void) | null = null;
 
-	getInstanceBufferSize(count : number){
-		if (count < Settings.MinInstances)
-			return 1;
-		else
-			return Settings.MaxInstances;
-	}
 
-
-	getProgram(renderFlags : RenderFlags, numInstances : number){
-		numInstances = this.getInstanceBufferSize(numInstances);
-		const index = renderFlags + (numInstances << 12);
-		let program = this.programs.get(index);
+	getProgram(renderFlags : RenderFlags){
+		let program = this.programs.get(renderFlags);
 		if (program)
 			return program;
-		program = this.createProgram(new Program(renderFlags, this.numLights, numInstances));
-		this.programs.set(index, program);
+		program = this.createProgram(new Program(renderFlags, this.numLights));
+		this.programs.set(renderFlags, program);
 		return program;
 	}
 
@@ -354,7 +349,7 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		const mapping = new TextureMapping();
 		mapping.gfxTexture = this.createTexture(texture, name, addToViewer);
 
-		
+
 		mapping.gfxSampler = this.createSampler({
 			magFilter : filtering,
 			minFilter : filtering,
@@ -362,9 +357,9 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 			wrapT : texture.wrapV,
 			mipFilter : GfxMipFilterMode.Nearest,
 		});
-		
-		
-		
+
+
+
 		return mapping;
 	}
 
@@ -382,6 +377,43 @@ export class Cache extends GfxRenderCache implements UI.TextureListHolder {
 		if (sourceMesh)
 			this.sourceModels.set(model, sourceMesh);
 	}
+
+	getInstanceTexture() : TextureMapping {
+		return this.instanceTexture;
+	}
+	getInstanceBuffer() : Float32Array {
+		return this.instanceBuffer;
+	}
+	applyInstanceBuffer(elementsWritten : number){
+		// todo: upload smaller texture
+		// todo: handle more than 4096 instances
+		this.device.uploadTextureData(this.instanceTexture.gfxTexture!, 0, [
+			this.instanceBuffer
+		]);
+	}
+
+	initInstanceData(){
+		this.instanceBuffer = new Float32Array(4 * 4 * Settings.MaxInstances);
+		this.instanceTexture = new TextureMapping();
+		this.instanceTexture.gfxSampler = this.createSampler({
+			wrapS: GfxWrapMode.Clamp,
+			wrapT: GfxWrapMode.Clamp,
+			minFilter: GfxTexFilterMode.Point,
+			magFilter: GfxTexFilterMode.Point,
+			mipFilter: GfxMipFilterMode.NoMip,
+		});
+		this.instanceTexture.gfxTexture = this.device.createTexture({
+			dimension: GfxTextureDimension.n2D,
+			pixelFormat: GfxFormat.F32_RGBA,
+			width: 4,
+			height: Settings.MaxInstances,
+			depth: 1,
+			numLevels: 1,
+			usage: GfxTextureUsage.Sampled,
+		});
+		this.allTextures.push(this.instanceTexture.gfxTexture);
+	}
+
 
 	public override destroy(): void {
 		const device = this.device;
@@ -446,7 +478,7 @@ export class StaticObject implements Destroyable {
 			allBuffers.push(buffer);
 			return true;
 		}
-		
+
 		if (mesh.vertices.BYTES_PER_ELEMENT === 2)
 			pushBuffer(mesh.vertices.buffer, 6, Program.a_Position, GfxFormat.U16_RGB);
 		else
@@ -515,57 +547,64 @@ export class StaticObject implements Destroyable {
 		this.inputState = device.createInputState(this.inputLayout, vertexBufferDescriptors, indexBufferDescriptor);
 	}
 
-	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, instanceCount : number, flipBackfaces = false): void {
-        const renderInst = renderInstManager.newRenderInst();
+	prepareToRender(device: GfxDevice, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput, cache : Cache, instanceCount : number, instanceOffset : number, flipBackfaces = false): void {
+		const renderInst = renderInstManager.newRenderInst();
 
 		const renderFlags = this.renderFlags;
 		const translucent = !!(renderFlags & RenderFlags.Translucent);
 
 		const skinned = !!(renderFlags & RenderFlags.Skinned);
 
-		const gfxProgram = cache.getProgram(renderFlags, instanceCount);
+		const gfxProgram = cache.getProgram(renderFlags);
 		const hasTexture = (this.renderFlags & RenderFlags.HasTexture) !== 0;
 		const textureArray = (this.renderFlags & RenderFlags.TextureTilemap) !== 0;
 
 		const scrollUVs = renderFlags & RenderFlags.ScrollUVs;
 		const hasMeshColour = renderFlags & RenderFlags.HasMeshColour;
-		const hasMeshUniforms = scrollUVs || hasMeshColour;
-		const numUniformBuffers = 2 + (hasMeshUniforms?1:0);
-		const numSamplers = skinned ? 2 : (hasTexture ? 1 : 0);
 
 
-		const samplerEntries : GfxBindingLayoutSamplerDescriptor[] = numSamplers ? [{
-			dimension : textureArray ? GfxTextureDimension.n2DArray : GfxTextureDimension.n2D,
-			formatKind : GfxSamplerFormatKind.Float,
-		}] : [];
-		if (skinned)
+
+		const samplerEntries : GfxBindingLayoutSamplerDescriptor[] = [{
+			// instance texture
+			dimension: GfxTextureDimension.n2D,
+			formatKind : GfxSamplerFormatKind.Float
+		}];
+		const textureMappings = [cache.getInstanceTexture()];
+
+
+		if (hasTexture || skinned){ // if skinned without texture, need to push dummy buffers to keep the shader bindings matched
 			samplerEntries.push({
-				dimension :  GfxTextureDimension.n2D,
+				dimension : textureArray ? GfxTextureDimension.n2DArray : GfxTextureDimension.n2D,
+				formatKind : GfxSamplerFormatKind.Float,
+			});
+			textureMappings.push(this.textureMapping!);
+		}
+
+		if (skinned){
+			samplerEntries.push({
+				dimension : GfxTextureDimension.n2D,
 				formatKind : GfxSamplerFormatKind.Float
 			});
+			textureMappings.push(this.animatedObject!.getAnimTexture(cache)!);
+		}
 
 		renderInst.setBindingLayouts([{
-			numUniformBuffers,
-			numSamplers,
+			numUniformBuffers : 2,
+			numSamplers : samplerEntries.length,
 			samplerEntries,
 		}]);
+		renderInst.setSamplerBindingsFromTextureMappings(textureMappings);
 
-		
-        renderInst.setSamplerBindingsFromTextureMappings([
-			this.textureMapping!,
-			this.animatedObject?.getAnimTexture(cache)!,
-		]);
-
-        renderInst.setGfxProgram(gfxProgram);
-        renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
+		renderInst.setGfxProgram(gfxProgram);
+		renderInst.setInputLayoutAndState(this.inputLayout, this.inputState);
 		const keepBackfaces = renderFlags & RenderFlags.KeepBackfaces;
 		const drawBackfacesSeparately = renderFlags & RenderFlags.DrawBackfacesSeparately;
 		if (drawBackfacesSeparately)
 			renderInst.setMegaStateFlags({ cullMode: flipBackfaces ? GfxCullMode.Front : GfxCullMode.Back });
 		else
-        	renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
-	
-		
+			renderInst.setMegaStateFlags({ cullMode: keepBackfaces ? GfxCullMode.None : GfxCullMode.Back });
+
+
 		if (translucent){
 			const megaState = renderInst.setMegaStateFlags({
 				depthWrite: false,
@@ -576,26 +615,23 @@ export class StaticObject implements Destroyable {
 				blendSrcFactor: GfxBlendFactor.SrcAlpha,
 			});
 		}
-		
-		
+
+
 		if (instanceCount === 1)
-        	renderInst.drawIndexes(this.indexCount);
+			renderInst.drawIndexes(this.indexCount);
 		else
 			renderInst.drawIndexesInstanced(this.indexCount, instanceCount);
 
 
 		// fill mesh uniforms
-		if (hasMeshColour || scrollUVs){
-			let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_MeshParams, (scrollUVs?4:0) + (hasMeshColour?4:0));
-			const uniformData = renderInst.mapUniformBufferF32(Program.ub_MeshParams);
+		let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_MeshParams, 4 + (hasMeshColour?4:0));
+		const uniformData = renderInst.mapUniformBufferF32(Program.ub_MeshParams);
 
-			if (hasMeshColour)
-				uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
-			if (scrollUVs){
-				const t = viewerInput.time * 0.001;
-				uniformOffset += fillVec4(uniformData, uniformOffset, this.scrollUVs[0] * t, this.scrollUVs[1] * t);
-			}
-		}
+		// shared params + scroll uvs
+		const t = viewerInput.time * 0.001;
+		uniformOffset += fillVec4(uniformData, uniformOffset, instanceOffset, 0, this.scrollUVs[0] * t, this.scrollUVs[1] * t);
+		if (hasMeshColour)
+			uniformOffset += fillColor(uniformData, uniformOffset, this.colour);
 
 		let renderLayer = GfxRendererLayer.OPAQUE + this.renderLayerOffset;
 		if (translucent)
@@ -603,10 +639,10 @@ export class StaticObject implements Destroyable {
 
 		renderInst.sortKey = makeSortKey(renderLayer, gfxProgram.ResourceUniqueId);
 
-        renderInstManager.submitRenderInst(renderInst);
+		renderInstManager.submitRenderInst(renderInst);
 
 		if (drawBackfacesSeparately && !flipBackfaces)
-			this.prepareToRender(device, renderInstManager, viewerInput, cache, instanceCount, true);
+			this.prepareToRender(device, renderInstManager, viewerInput, cache, instanceCount, instanceOffset, true);
 	}
 
 	destroy(device: GfxDevice): void {
@@ -615,7 +651,7 @@ export class StaticObject implements Destroyable {
 			device.destroyBuffer(buf);
 	}
 
-	
+
 	makeTranslucent(alpha : number, unlit : boolean, keepBackfaces : boolean){
 		this.colour.a = alpha;
 		this.renderFlags |= RenderFlags.Translucent | RenderFlags.HasMeshColour;
@@ -678,7 +714,7 @@ export class AnimatedObject {
 		const numBones = animation.numBones;
 		const anim = animation.anims[index];
 		const numFrames = Math.ceil(anim.endTime * Settings.AnimationTextureFps);
-		
+
 		const oldHeight = this.rawAnimTexture.height;
 		const thisHeight = numFrames;
 		const totalHeight = oldHeight + thisHeight;
@@ -703,7 +739,7 @@ export class AnimatedObject {
 			calculateAnimationTransforms(animation, index, transforms, t);
 			for (let i = 0; i < numBones; ++i){
 				const thisBone = transforms[i];
-				
+
 				fillMatrix4x3(pixels, (oldHeight + row) * stride + i * 12, thisBone);
 
 				scratchAABB.transform(animation.boneAABBs[i], thisBone);
@@ -727,7 +763,7 @@ export class AnimatedObject {
 		return this._animTexture;
 	}
 
-	fillAnimationUniform(target : Float32Array, offset : number, animController : AnimationController){
+	fillAnimationUniform(target : Float32Array, offset : number, animController : AnimationController, opacity : number){
 		const animIndex = animController.currentAnimationIndex;
 		let animStartPixels = this.animTextureOffsets[animIndex * 2];
 		if (animStartPixels < 0){
@@ -738,7 +774,7 @@ export class AnimatedObject {
 
 		const t = (animStartPixels + animController.t * animScale) / this.rawAnimTexture.height;
 		const texelWidth = 1 / this.rawAnimTexture.width;
-		return fillVec4(target, offset, t, texelWidth);
+		return fillVec4(target, offset, t, texelWidth, 0, opacity);
 	}
 };
 
@@ -767,6 +803,7 @@ export type SceneSettings = {
 class ScenePanel extends UI.Panel {
 	fogCheckbox : UI.Checkbox;
 	settings : SceneSettings;
+	instanceCountLabel : HTMLDivElement;
 	constructor(scene : SceneRenderer){
 		super();
 		this.settings = scene.sceneSettings;
@@ -790,11 +827,19 @@ class ScenePanel extends UI.Panel {
 			}
 			this.contents.appendChild(fogScale.elem);
 		}
+
+		this.instanceCountLabel = document.createElement("div");
+		this.instanceCountLabel.classList.add("label");
+		this.contents.appendChild(this.instanceCountLabel);
+	}
+
+	setNumInstancesRendered(count : number){
+		this.instanceCountLabel.innerText = "Instances rendered: " + count;
 	}
 }
 
 export class SceneRenderer implements Viewer.SceneGfx{
-    renderHelper: GfxRenderHelper;
+	renderHelper: GfxRenderHelper;
 	cache : Cache;
 	sceneSettings : SceneSettings;
 	entitySets : Entity[][] = [];
@@ -802,6 +847,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
 	textureHolder : UI.TextureListHolder;
 
+	scenePanel : ScenePanel|undefined = undefined;
 
 	constructor(device : GfxDevice, context : SceneContext, sceneSettings : SceneSettings){
 		const cache = new Cache(device);
@@ -811,6 +857,8 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		this.sceneSettings = {...sceneSettings};
 
 		cache.numLights = sceneSettings.lightColours.length;
+
+		cache.initInstanceData();
 	}
 
 	getDefaultWorldMatrix(out : mat4){
@@ -818,13 +866,12 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			mat4.targetTo(out, this.sceneSettings.cameraPos, this.sceneSettings.cameraTarget ?? Vec3Zero, Vec3UnitY);
 	}
 
-
-    createPanels() : UI.Panel[] {
-		return [new ScenePanel(this)];
+	createPanels() : UI.Panel[] {
+		this.scenePanel = new ScenePanel(this);
+		return [this.scenePanel];
 	}
 
 	initEntities(device : GfxDevice, entities : Entity[]){
-		
 		// group entities by type
 		for (const entity of entities){
 			// insert the entity into the correct entitySet
@@ -855,7 +902,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 		// generate shaders up front
 		for (const set of this.entitySets){
 			for (const mesh of set[0].meshes){
-				this.cache.getProgram(mesh.renderFlags, set.length);
+				this.cache.getProgram(mesh.renderFlags);
 			}
 		}
 
@@ -869,9 +916,9 @@ export class SceneRenderer implements Viewer.SceneGfx{
 
 		renderInst.setBindingLayouts([{
 			numUniformBuffers : 2,
-			numSamplers : 0,
+			numSamplers : 1,
 		}]);
-		
+
 		// set scene uniforms
 		const numLights = this.cache.numLights;
 		const settings = this.sceneSettings;
@@ -907,13 +954,18 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			fogEnabled ? fogInvRange : 0,
 			0);
 
-		
-		// update and draw entitis
-        const renderInstManager = this.renderHelper.renderInstManager;
+
+		// update and draw entities
+		const renderInstManager = this.renderHelper.renderInstManager;
 		const dt = Math.min(viewerInput.deltaTime * 0.001, 1/15);
 		const viewMatrix = viewerInput.camera.viewMatrix;
 		const frustum = viewerInput.camera.frustum;
 		const cache = this.cache;
+
+		const instanceData : Float32Array = cache.getInstanceBuffer();
+		let instanceOffset = 0;
+		let totalInstanceCount = 0;
+
 		for (const entities of this.entitySets){
 			// update
 			for (let i = 0; i < entities.length; ++i){
@@ -923,7 +975,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 					e.viewDistance = -Infinity;
 				else
 					e.viewDistance = computeViewSpaceDepthFromWorldSpacePoint(viewMatrix, e.position);
-				
+
 				if (e.update && (visible || e.alwaysUpdate)){
 					const updateResult = e.update(dt);
 					if (updateResult === false){
@@ -945,7 +997,7 @@ export class SceneRenderer implements Viewer.SceneGfx{
 			const firstMesh = firstEntity.meshes[0];
 			const translucent = firstMesh.renderFlags & RenderFlags.Translucent;
 			const skinned = firstMesh.renderFlags & RenderFlags.Skinned;
-		
+
 			// sort
 			let startIndex = 0;
 			let endIndex = entities.length;
@@ -967,44 +1019,32 @@ export class SceneRenderer implements Viewer.SceneGfx{
 				continue; // nobody visible
 
 			// draw
-			const setSize = cache.getInstanceBufferSize(count);
-			for (let setStartIndex = 0; setStartIndex < endIndex; setStartIndex += setSize){
-				const setEndIndex = Math.min(setStartIndex + setSize, endIndex);
-				const setCount = setEndIndex - setStartIndex;
-				
-				// populate uniforms
-				const renderInst = renderInstManager.pushTemplateRenderInst();
-				let uniformOffset = renderInst.allocateUniformBuffer(Program.ub_InstanceParams, cache.getInstanceBufferSize(setCount) * 4*4);
-				const uniformData = renderInst.mapUniformBufferF32(Program.ub_InstanceParams);
-				for (let i = setStartIndex; i < setEndIndex; ++i){
-					const entity = entities[i];
-					// push matrix uniform
-					uniformOffset += fillMatrix4x3(uniformData, uniformOffset, entity.modelMatrix);
-					// push settings unifom
-					if (skinned){ // skinned settings
-						const animEntity = entity as AnimatedEntity;
+			for (let index = startIndex; index < endIndex; ++index){
+				const entity = entities[index];
+				// push matrix uniform
+				instanceOffset += fillMatrix4x3(instanceData, instanceOffset, entity.modelMatrix);
+				// push settings unifom
+				if (skinned){ // skinned settings
+					const animEntity = entity as AnimatedEntity;
 
-						uniformOffset += animEntity.animatedObject.fillAnimationUniform(uniformData, uniformOffset, animEntity.animationController);
-
-						// set opacity to w field
-						uniformData[uniformOffset - 1] = entity.opacity;
-
-					} else { // basic settings
-						uniformOffset += fillVec4(uniformData, uniformOffset, 0, 0, 0,  entity.opacity);
-					}
+					instanceOffset += animEntity.animatedObject.fillAnimationUniform(instanceData, instanceOffset, animEntity.animationController, entity.opacity);
+				} else { // basic settings
+					instanceOffset += fillVec4(instanceData, instanceOffset, 0, 0, 0,  entity.opacity);
 				}
-
-				// draw
-				for (const mesh of firstEntity.meshes){
-					mesh.prepareToRender(device, renderInstManager, viewerInput, cache, setCount);
-				}
-
-				renderInstManager.popTemplateRenderInst();
 			}
+
+			// draw
+			for (const mesh of firstEntity.meshes){
+				mesh.prepareToRender(device, renderInstManager, viewerInput, cache, count, totalInstanceCount);
+			}
+			totalInstanceCount += count;
 		}
-			
-        renderInstManager.popTemplateRenderInst();
-        this.renderHelper.prepareToRender();
+
+		cache.applyInstanceBuffer(instanceOffset);
+		this.scenePanel?.setNumInstancesRendered(totalInstanceCount);
+
+		renderInstManager.popTemplateRenderInst();
+		this.renderHelper.prepareToRender();
 	}
 
 	addEntity(entity : Entity){
@@ -1020,30 +1060,30 @@ export class SceneRenderer implements Viewer.SceneGfx{
 	}
 
 	public render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput): void {
-        const renderInstManager = this.renderHelper.renderInstManager;
+		const renderInstManager = this.renderHelper.renderInstManager;
 
 		const renderPassDescriptor = makeAttachmentClearDescriptor(this.sceneSettings.clearColour); // standardFullClearRenderPassDescriptor;
-        const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, renderPassDescriptor);
-        const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, renderPassDescriptor);
+		const mainColorDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.Color0, viewerInput, renderPassDescriptor);
+		const mainDepthDesc = makeBackbufferDescSimple(GfxrAttachmentSlot.DepthStencil, viewerInput, renderPassDescriptor);
 
-        const builder = this.renderHelper.renderGraph.newGraphBuilder();
+		const builder = this.renderHelper.renderGraph.newGraphBuilder();
 
-        const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
-        const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
-        builder.pushPass((pass) => {
-            pass.setDebugName('Main');
-            pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
-            pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
-            pass.exec((passRenderer) => {
-                renderInstManager.drawOnPassRenderer(passRenderer);
-            });
-        });
-        pushAntialiasingPostProcessPass(builder, this.renderHelper, viewerInput, mainColorTargetID);
-        builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
+		const mainColorTargetID = builder.createRenderTargetID(mainColorDesc, 'Main Color');
+		const mainDepthTargetID = builder.createRenderTargetID(mainDepthDesc, 'Main Depth');
+		builder.pushPass((pass) => {
+			pass.setDebugName('Main');
+			pass.attachRenderTargetID(GfxrAttachmentSlot.Color0, mainColorTargetID);
+			pass.attachRenderTargetID(GfxrAttachmentSlot.DepthStencil, mainDepthTargetID);
+			pass.exec((passRenderer) => {
+				renderInstManager.drawOnPassRenderer(passRenderer);
+			});
+		});
+		pushAntialiasingPostProcessPass(builder, this.renderHelper, viewerInput, mainColorTargetID);
+		builder.resolveRenderTargetToExternalTexture(mainColorTargetID, viewerInput.onscreenTexture);
 
-        this.prepareToRender(device, viewerInput);
-        this.renderHelper.renderGraph.execute(builder);
-        renderInstManager.resetRenderInsts();
+		this.prepareToRender(device, viewerInput);
+		this.renderHelper.renderGraph.execute(builder);
+		renderInstManager.resetRenderInsts();
 	}
 
 	public destroy(device: GfxDevice) {
