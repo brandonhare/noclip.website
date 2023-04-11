@@ -82,6 +82,7 @@ import * as Scenes_SpongebobRevengeOfTheFlyingDutchman from "./SpongebobRevengeO
 import * as Scenes_MarioKart8Deluxe from './MarioKart8Deluxe/Scenes';
 import * as Scenes_JetSetRadio from './JetSetRadio/Scenes';
 import * as Scenes_Subnautica from './Subnautica/scenes';
+import * as Scenes_Halo1 from './Halo1/scenes';
 import * as Scenes_Glover from './Glover/scenes';
 import * as Scenes_HalfLife from './GoldSrc/Scenes_HalfLife';
 import * as Scenes_SuperMonkeyBall from './SuperMonkeyBall/Scenes_SuperMonkeyBall';
@@ -93,6 +94,7 @@ import { DroppedFileSceneDesc, traverseFileSystemDataTransfer } from './Scenes_F
 import { UI, Panel } from './ui';
 import { serializeCamera, deserializeCamera, FPSCameraController } from './Camera';
 import { assertExists, assert } from './util';
+import { loadRustLib } from './rustlib';
 import { DataFetcher } from './DataFetcher';
 import { atob, btoa } from './Ascii85';
 import { mat4 } from 'gl-matrix';
@@ -205,6 +207,7 @@ const sceneGroups = [
     Scenes_Infra.sceneGroup,
     Scenes_JetSetRadio.sceneGroup,
     Scenes_Subnautica.sceneGroup,
+    Scenes_Halo1.sceneGroup,
     Scenes_HalfLife.sceneGroup,
     Scenes_Nanosaur.sceneGroup,
     Scenes_Bugdom.sceneGroup,
@@ -300,6 +303,8 @@ class Main {
         this.toplevel.appendChild(this.canvas);
         window.onresize = this._onResize.bind(this);
         this._onResize();
+
+        await loadRustLib();
 
         const errorCode = await initializeViewer(this, this.canvas);
         if (errorCode !== InitErrorCode.SUCCESS) {

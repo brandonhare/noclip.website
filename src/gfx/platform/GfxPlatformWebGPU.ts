@@ -5,6 +5,7 @@ import { assertExists, assert, align, gfxBindingLayoutDescriptorEqual } from "./
 import { FormatTypeFlags, getFormatTypeFlags, getFormatByteSize, getFormatSamplerKind, FormatFlags, getFormatFlags } from "./GfxPlatformFormat";
 import { HashMap, nullHashFunc } from "../../HashMap";
 import type { glsl_compile as glsl_compile_ } from "../../../rust/pkg/index";
+import { rust } from "../../rustlib";
 
 interface GfxBufferP_WebGPU extends GfxBuffer {
     gpuBuffer: GPUBuffer;
@@ -161,6 +162,12 @@ function translateTextureFormat(format: GfxFormat): GPUTextureFormat {
         return 'rgba8unorm';
     else if (format === GfxFormat.U8_RGBA_SRGB)
         return 'rgba8unorm-srgb';
+    else if (format === GfxFormat.S8_R_NORM)
+        return 'r8snorm';
+    else if (format === GfxFormat.S8_RG_NORM)
+        return 'rg8snorm';
+    else if (format === GfxFormat.S8_RGBA_NORM)
+        return 'rgba8snorm';
     else if (format === GfxFormat.U32_R)
         return 'r32uint';
     else if (format === GfxFormat.F16_RGBA)
@@ -244,11 +251,6 @@ function getPlatformBuffer(buffer_: GfxBuffer): GPUBuffer {
 function getPlatformSampler(sampler_: GfxSampler): GPUSampler {
     const sampler = sampler_ as GfxSamplerP_WebGPU;
     return sampler.gpuSampler;
-}
-
-function getPlatformQuerySet(queryPool_: GfxQueryPool): GPUQuerySet {
-    const queryPool = queryPool_ as GfxQueryPoolP_WebGPU;
-    return queryPool.querySet;
 }
 
 function translateTopology(topology: GfxPrimitiveTopology): GPUPrimitiveTopology {
@@ -429,14 +431,28 @@ function translateVertexFormat(format: GfxFormat): GPUVertexFormat {
         return 'uint8x4';
     else if (format === GfxFormat.U8_RGBA)
         return 'uint8x4';
+    else if (format === GfxFormat.U8_RG_NORM)
+        return 'unorm8x2';
     else if (format === GfxFormat.U8_RGBA_NORM)
         return 'unorm8x4';
     else if (format === GfxFormat.S8_RGB_NORM)
         return 'snorm8x4';
     else if (format === GfxFormat.S8_RGBA_NORM)
         return 'snorm8x4';
+    else if (format === GfxFormat.U16_RG_NORM)
+        return 'unorm16x2';
+    else if (format === GfxFormat.U16_RGBA_NORM)
+        return 'unorm16x4';
+    else if (format === GfxFormat.S16_RG_NORM)
+        return 'snorm16x2';
+    else if (format === GfxFormat.S16_RGBA_NORM)
+        return 'snorm16x4';
     else if (format === GfxFormat.S16_RG)
         return 'uint16x2';
+    else if (format === GfxFormat.F16_RG)
+        return 'float16x2';
+    else if (format === GfxFormat.F16_RGBA)
+        return 'float16x4';
     else if (format === GfxFormat.F32_R)
         return 'float32';
     else if (format === GfxFormat.F32_RG)
@@ -489,7 +505,9 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
     private gpuColorAttachments: GPURenderPassColorAttachment[];
     private gpuDepthStencilAttachment: GPURenderPassDepthStencilAttachment;
     private gfxColorAttachment: (GfxTextureSharedP_WebGPU | null)[] = [];
+    private gfxColorAttachmentLevel: number[] = [];
     private gfxColorResolveTo: (GfxTextureSharedP_WebGPU | null)[] = [];
+    private gfxColorResolveToLevel: number[] = [];
     private gfxDepthStencilAttachment: GfxTextureSharedP_WebGPU | null = null;
     private gfxDepthStencilResolveTo: GfxTextureSharedP_WebGPU | null = null;
     private frameCommandEncoder: GPUCommandEncoder | null;
@@ -509,6 +527,14 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
             colorAttachments: this.gpuColorAttachments,
             depthStencilAttachment: this.gpuDepthStencilAttachment,
         };
+    }
+
+    private getTextureView(target: GfxTextureSharedP_WebGPU, level: number): GPUTextureView {
+        assert(level < target.numLevels);
+        if (target.numLevels === 1)
+            return target.gpuTextureView;
+        else
+            return target.gpuTexture.createView({ baseMipLevel: level, mipLevelCount: 1 });
     }
 
     private setRenderPassDescriptor(descriptor: GfxRenderPassDescriptor): void {
@@ -532,12 +558,15 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
             this.gfxColorAttachment[i] = colorAttachment;
             this.gfxColorResolveTo[i] = colorResolveTo;
 
+            this.gfxColorAttachmentLevel[i] = descriptor.colorAttachmentLevel[i];
+            this.gfxColorResolveToLevel[i] = descriptor.colorResolveToLevel[i];
+
             if (colorAttachment !== null) {
                 if (this.gpuColorAttachments[i] === undefined)
                     this.gpuColorAttachments[i] = {} as GPURenderPassColorAttachment;
 
                 const dstAttachment = this.gpuColorAttachments[i];
-                dstAttachment.view = colorAttachment.gpuTextureView;
+                dstAttachment.view = this.getTextureView(colorAttachment, this.gfxColorAttachmentLevel[i]);
                 const clearColor = descriptor.colorClearColor[i];
                 if (clearColor === 'load') {
                     dstAttachment.loadOp = 'load';
@@ -549,7 +578,7 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
                 dstAttachment.resolveTarget = undefined;
                 if (colorResolveTo !== null) {
                     if (colorAttachment.sampleCount > 1)
-                        dstAttachment.resolveTarget = colorResolveTo.gpuTextureView;
+                        dstAttachment.resolveTarget = this.getTextureView(colorResolveTo, this.gfxColorResolveToLevel[i]);
                     else
                         dstAttachment.storeOp = 'store';
                 }
@@ -706,12 +735,12 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
         this.gpuRenderPassEncoder!.popDebugGroup();
     }
 
-    private copyAttachment(dst: GfxTextureSharedP_WebGPU, src: GfxTextureSharedP_WebGPU): void {
+    private copyAttachment(dst: GfxTextureSharedP_WebGPU, dstLevel: number, src: GfxTextureSharedP_WebGPU, srcLevel: number): void {
         assert(src.sampleCount === 1);
-        const srcCopy: GPUImageCopyTexture = { texture: src.gpuTexture };
-        const dstCopy: GPUImageCopyTexture = { texture: dst.gpuTexture };
-        assert(src.width === dst.width);
-        assert(src.height === dst.height);
+        const srcCopy: GPUImageCopyTexture = { texture: src.gpuTexture, mipLevel: srcLevel };
+        const dstCopy: GPUImageCopyTexture = { texture: dst.gpuTexture, mipLevel: dstLevel };
+        assert((src.width >>> srcLevel) === (dst.width >>> dstLevel));
+        assert((src.height >>> srcLevel) === (dst.height >>> dstLevel));
         assert(!!(src.usage & GPUTextureUsage.COPY_SRC));
         assert(!!(dst.usage & GPUTextureUsage.COPY_DST));
         this.frameCommandEncoder!.copyTextureToTexture(srcCopy, dstCopy, [dst.width, dst.height, 1]);
@@ -726,14 +755,14 @@ class GfxRenderPassP_WebGPU implements GfxRenderPass {
             const colorAttachment = this.gfxColorAttachment[i];
             const colorResolveTo = this.gfxColorResolveTo[i];
             if (colorAttachment !== null && colorResolveTo !== null && colorAttachment.sampleCount === 1)
-                this.copyAttachment(colorResolveTo, colorAttachment);
+                this.copyAttachment(colorResolveTo, this.gfxColorAttachmentLevel[i], colorAttachment, this.gfxColorResolveToLevel[i]);
         }
 
         if (this.gfxDepthStencilAttachment !== null && this.gfxDepthStencilResolveTo !== null) {
             if (this.gfxDepthStencilAttachment.sampleCount > 1) {
                 // TODO(jstpierre): MSAA depth resolve (requires shader)
             } else {
-                this.copyAttachment(this.gfxDepthStencilResolveTo, this.gfxDepthStencilAttachment);
+                this.copyAttachment(this.gfxDepthStencilResolveTo, 0, this.gfxDepthStencilAttachment, 0);
             }
         }
 
@@ -913,7 +942,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
             wrapT: GfxWrapMode.Repeat,
             minFilter: GfxTexFilterMode.Point,
             magFilter: GfxTexFilterMode.Point,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
         });
         this.setResourceName(this._fallbackSamplerFiltering, 'Fallback Sampler Filtering');
 
@@ -922,7 +951,7 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
             wrapT: GfxWrapMode.Repeat,
             minFilter: GfxTexFilterMode.Point,
             magFilter: GfxTexFilterMode.Point,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             compareMode: GfxCompareMode.Always,
         });
         this.setResourceName(this._fallbackSamplerFiltering, 'Fallback Sampler Comparison');
@@ -1050,7 +1079,6 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
         const gpuSampler = this.device.createSampler({
             addressModeU: translateWrapMode(descriptor.wrapS),
             addressModeV: translateWrapMode(descriptor.wrapT),
-            // TODO(jstpierre): Expose this as a sampler parameter.
             addressModeW: translateWrapMode(descriptor.wrapQ ?? descriptor.wrapS),
             lodMinClamp,
             lodMaxClamp,
@@ -1229,28 +1257,25 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
     }
 
     public createInputLayout(inputLayoutDescriptor: GfxInputLayoutDescriptor): GfxInputLayout {
-        // GfxInputLayout is not a platform object, it's a descriptor in WebGPU.
-
         const buffers: GPUVertexBufferLayout[] = [];
-        for (let i = 0; i < inputLayoutDescriptor.vertexBufferDescriptors.length; i++) {
-            const b = inputLayoutDescriptor.vertexBufferDescriptors[i];
-            if (b === null)
-                continue;
-            const arrayStride = b.byteStride;
-            const stepMode = translateVertexBufferFrequency(b.frequency);
-            const attributes: GPUVertexAttribute[] = [];
-            buffers[i] = { arrayStride, stepMode, attributes };
-        }
-
         for (let i = 0; i < inputLayoutDescriptor.vertexAttributeDescriptors.length; i++) {
             const attr = inputLayoutDescriptor.vertexAttributeDescriptors[i];
-            const b = assertExists(buffers[attr.bufferIndex]);
+
             const attribute: GPUVertexAttribute = {
                 shaderLocation: attr.location,
                 format: translateVertexFormat(attr.format),
                 offset: attr.bufferByteOffset,
             };
-            (b.attributes as GPUVertexAttribute[]).push(attribute);
+
+            if (buffers[attr.bufferIndex] !== undefined) {
+                (buffers[attr.bufferIndex].attributes as GPUVertexAttribute[]).push(attribute);
+            } else {
+                const b = assertExists(inputLayoutDescriptor.vertexBufferDescriptors[attr.bufferIndex]);
+                const arrayStride = b.byteStride;
+                const stepMode = translateVertexBufferFrequency(b.frequency);
+                const attributes: GPUVertexAttribute[] = [attribute];
+                buffers[attr.bufferIndex] = { arrayStride, stepMode, attributes };
+            }
         }
 
         const indexFormat = translateIndexFormat(inputLayoutDescriptor.indexBufferFormat);
@@ -1645,10 +1670,9 @@ class GfxImplP_WebGPU implements GfxSwapChain, GfxDevice {
     }
 
     public queryLimits(): GfxDeviceLimits {
-        // TODO(jstpierre): GPULimits
         return {
-            uniformBufferMaxPageWordSize: 0x10000,
-            uniformBufferWordAlignment: this.device.limits.minUniformBufferOffsetAlignment * 4,
+            uniformBufferMaxPageWordSize: this.device.limits.maxUniformBufferBindingSize >>> 2,
+            uniformBufferWordAlignment: this.device.limits.minUniformBufferOffsetAlignment >>> 2,
             supportedSampleCounts: [1],
             occlusionQueriesRecommended: true,
             computeShadersSupported: true,
@@ -1757,8 +1781,7 @@ export async function createSwapChainForWebGPU(canvas: HTMLCanvasElement | Offsc
     if (!context)
         return null;
 
-    const { glsl_compile } = await import('../../../rust/pkg/index');
-    return new GfxImplP_WebGPU(adapter, device, canvas, context, glsl_compile);
+    return new GfxImplP_WebGPU(adapter, device, canvas, context, rust!.glsl_compile);
 }
 
 export function gfxDeviceGetImpl_WebGPU(gfxDevice: GfxDevice): GfxImplP_WebGPU {

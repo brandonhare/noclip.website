@@ -1742,7 +1742,7 @@ vec4 SeamlessSampleTex(PD_SAMPLER_2D(t_Texture), in float t_SeamlessScale) {
 
 vec4 SeamlessSampleTex(PD_SAMPLER_2D(t_Texture), in bool t_UseSeamless, in vec2 t_TexCoord) {
     if (t_UseSeamless) {
-        return SeamlessSampleTex(PU_SAMPLER_2D(t_Texture), 1.0);
+        return SeamlessSampleTex(PF_SAMPLER_2D(t_Texture), 1.0);
     } else {
         return texture(PU_SAMPLER_2D(t_Texture), t_TexCoord.xy);
     }
@@ -1814,7 +1814,7 @@ void mainPS() {
     bool use_seamless_detail = ${getDefineBool(m, `USE_SEAMLESS_DETAIL`)};
     if (use_seamless_detail) {
         float t_SeamlessDetailScale = u_DetailTextureTransform.mx.x;
-        t_DetailTexture = DebugColorTexture(SeamlessSampleTex(SAMPLER_2D(u_TextureDetail), t_SeamlessDetailScale));
+        t_DetailTexture = DebugColorTexture(SeamlessSampleTex(PP_SAMPLER_2D(u_TextureDetail), t_SeamlessDetailScale));
     } else {
         vec2 t_DetailTexCoord = Mul(u_DetailTextureTransform, vec4(v_TexCoord0.zw, 1.0, 1.0));
         t_DetailTexture = DebugColorTexture(texture(SAMPLER_2D(u_TextureDetail), t_DetailTexCoord));
@@ -4673,7 +4673,7 @@ class StaticResources {
         this.shadowSampler = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             wrapS: GfxWrapMode.Clamp,
             wrapT: GfxWrapMode.Clamp,
             compareMode: GfxCompareMode.Less,
@@ -4681,7 +4681,7 @@ class StaticResources {
         this.linearClampSampler = cache.createSampler({
             magFilter: GfxTexFilterMode.Bilinear,
             minFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             minLOD: 0,
             maxLOD: 100,
             wrapS: GfxWrapMode.Clamp,
@@ -4690,7 +4690,7 @@ class StaticResources {
         this.linearRepeatSampler = cache.createSampler({
             magFilter: GfxTexFilterMode.Bilinear,
             minFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             minLOD: 0,
             maxLOD: 100,
             wrapS: GfxWrapMode.Repeat,
@@ -4699,7 +4699,7 @@ class StaticResources {
         this.pointClampSampler = cache.createSampler({
             magFilter: GfxTexFilterMode.Point,
             minFilter: GfxTexFilterMode.Point,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             minLOD: 0,
             maxLOD: 100,
             wrapS: GfxWrapMode.Clamp,
@@ -5312,7 +5312,7 @@ export class LightmapManager {
         this.gfxSampler = cache.createSampler({
             minFilter: GfxTexFilterMode.Bilinear,
             magFilter: GfxTexFilterMode.Bilinear,
-            mipFilter: GfxMipFilterMode.NoMip,
+            mipFilter: GfxMipFilterMode.Nearest,
             wrapS: GfxWrapMode.Clamp,
             wrapT: GfxWrapMode.Clamp,
         });
