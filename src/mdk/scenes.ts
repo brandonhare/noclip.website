@@ -1,83 +1,147 @@
-import { mat4 } from "gl-matrix";
-import ArrayBufferSlice from "../ArrayBufferSlice";
-import { CameraController } from "../Camera";
-import { NamedArrayBufferSlice } from "../DataFetcher";
-import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase";
-import { GfxDevice } from "../gfx/platform/GfxPlatform";
-import { TextureListHolder, Panel } from "../ui";
-import { assert, readString } from "../util.js";
-import { SceneGfx, Texture, ViewerRenderInput } from "../viewer";
-import { MtiMaterial, parseDti, parseMti, parseMto, parseSni } from "./data.js";
+import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase.js";
+import { GfxDevice, GfxFormat, GfxMipFilterMode, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
+import { TextureListHolder } from "../ui";
+import { SceneGfx, ViewerRenderInput, Texture as ViewerTexture } from "../viewer.js";
+import { MtiTexture, parseDti, parseMti, parseMto, parseSni } from "./data.js";
 
-const pathBase = "mdk";
+
+function createCanvasTexture(name: string, width: number, height: number, pixels: Uint8Array, palette: Uint8Array): ViewerTexture {
+	const canvas = document.createElement("canvas");
+	canvas.width = width;
+	canvas.height = height;
+	const ctx = canvas.getContext("2d")!;
+	const imgData = ctx.getImageData(0, 0, width, height);
+	const dest = imgData.data;
+	for (let i = 0; i < width * height; ++i) {
+		const p = pixels[i] * 3;
+		dest[i * 4] = palette[p];
+		dest[i * 4 + 1] = palette[p + 1];
+		dest[i * 4 + 2] = palette[p + 2];
+		dest[i * 4 + 3] = (p === 0) ? 0 : 255;
+	}
+	ctx.putImageData(imgData, 0, 0);
+	return {
+		name,
+		surfaces: [canvas]
+	};
+}
+
 
 class MdkRenderer implements SceneGfx, TextureListHolder {
+	viewerTextures: ViewerTexture[] = [];
 	textureHolder = this;
-	onnewtextures = null;
-	
-	constructor(public viewerTextures: Texture[]){}
-	
-	
-	render(device: GfxDevice, renderInput: ViewerRenderInput) {}
-	destroy(device: GfxDevice) {}
+	onnewtextures: (() => void) | null = null;
+
+	device: GfxDevice;
+	textures: GfxTexture[] = [];
+	pointSampler: GfxSampler;
+	lookupTexture: GfxSamplerBinding;
+
+	constructor(device: GfxDevice) {
+		this.device = device;
+
+		this.pointSampler = device.createSampler({
+			wrapS: GfxWrapMode.Repeat,
+			wrapT: GfxWrapMode.Repeat,
+			minFilter: GfxTexFilterMode.Point,
+			magFilter: GfxTexFilterMode.Point,
+			mipFilter: GfxMipFilterMode.Nearest
+		});
+
+		const lookupData = new Uint8Array(0x100);
+		for (let i = 0; i < 0x100; ++i)
+			lookupData[i] = i;
+		this.lookupTexture = this.createTexture("ColourLookupTex", 0x100, 1, GfxFormat.U8_R_NORM, lookupData);
+	}
+
+	createTexture(name: string, width: number, height: number, pixelFormat: GfxFormat, pixels: Uint8Array): GfxSamplerBinding {
+		const gfxTexture = this.device.createTexture({
+			dimension: GfxTextureDimension.n2D,
+			pixelFormat,
+			width,
+			height,
+			depth: 1,
+			numLevels: 1,
+			usage: GfxTextureUsage.Sampled
+		});
+		this.device.setResourceName(gfxTexture, name);
+		this.device.uploadTextureData(gfxTexture, 0, [pixels]);
+		this.textures.push(gfxTexture);
+
+		return {
+			gfxTexture,
+			gfxSampler: this.pointSampler,
+			lateBinding: null
+		};
+	}
+
+	createGreyscaleTextureWithPreview(name: string, width: number, height: number, pixels: Uint8Array, palette: Uint8Array): GfxSamplerBinding {
+		this.viewerTextures.push(createCanvasTexture(name, width, height, pixels, palette));
+		return this.createTexture(name, width, height, GfxFormat.U8_R_NORM, pixels);
+	}
+
+	render(device: GfxDevice, renderInput: ViewerRenderInput) { }
+	destroy(device: GfxDevice) {
+		for (const tex of this.textures) {
+			device.destroyTexture(tex);
+		}
+		device.destroySampler(this.pointSampler);
+	}
+}
+
+function mergePalettes(base: Uint8Array, target: Uint8Array, offsetBytes: number): Uint8Array {
+	const result = new Uint8Array(base);
+	result.set(target, offsetBytes);
+	return result;
 }
 
 class MdkSceneDesc implements SceneDesc {
-	constructor(public id : string, public name : string){}
+	constructor(public id: string, public name: string) { }
 
-	async createScene(device: GfxDevice, context: SceneContext): Promise<SceneGfx> {
+	async createScene(device: GfxDevice, context: SceneContext): Promise<MdkRenderer> {
 		const dataFetcher = context.dataFetcher;
 
-
-		const path = `${pathBase}/TRAVERSE/${this.id}/${this.id}`;
+		const path = `mdk/TRAVERSE/${this.id}/${this.id}`;
 		const dtiPromise = dataFetcher.fetchData(path + ".DTI").then(parseDti);
 		const mtoPromise = dataFetcher.fetchData(path + "O.MTO").then(parseMto);
-		const sniPromise = "sni"// dataFetcher.fetchData(path + "O.SNI").then(parseSni);
 		const mtiPromise = dataFetcher.fetchData(path + "S.MTI").then(parseMti);
+		const sniPromise = dataFetcher.fetchData(path + "O.SNI").then(parseSni);
 
-		const mats : Texture[] = [];
+		const renderer = new MdkRenderer(device);
+		const materials = new Map<string, { binding: GfxSamplerBinding, width: number, height: number; }>();
 
-		function createMat(name : string, mat : MtiMaterial, pal : Uint8Array, arenaName?: string){
-			if (typeof(mat) === "number") return;
-
-			const canvas = document.createElement("canvas");
-			const width = mat.width;
-			const height = mat.height;
-			canvas.width = width;
-			canvas.height = height;
-			const ctx = canvas.getContext("2d")!;
-			const imgData = ctx.getImageData(0, 0, width, height);
-			const src = mat.pixels;
-			const dest = imgData.data;
-			for (let i = 0; i < width*height; ++i){
-				const p = src[i]*3;
-				dest[i*4] = pal[p];
-				dest[i*4+1] = pal[p+1];
-				dest[i*4+2] = pal[p+2];
-				dest[i*4+3] = (p === 0) ? 0 : 255;
-			}
-			ctx.putImageData(imgData, 0, 0);
-			const result : Texture = {name, surfaces:[canvas]};
-			if (arenaName){
-				result.extraInfo = new Map();
-				result.extraInfo.set("Arena index", arenaName);
-			}
-			mats.push(result);
+		function addTextures(map: Map<string, MtiTexture>, palette: Uint8Array) {
+			map.forEach((tex, name) => {
+				if (!materials.has(name)) {
+					const binding = renderer.createGreyscaleTextureWithPreview(name, tex.width, tex.height, tex.pixels, palette);
+					materials.set(name, {
+						binding,
+						width: tex.width,
+						height: tex.height
+					});
+				}
+			});
 		}
 
-		const levelPalette = (await dtiPromise).levelPalette;
-		let firstArenaPalette : Uint8Array|null = null;
-		for (const arena of await mtoPromise){
-			const arenaPalette = new Uint8Array(0x300);
-			arenaPalette.set(levelPalette);
-			arenaPalette.set(arena.palette, 4*16*3);
-			if (!firstArenaPalette)
-				firstArenaPalette = arenaPalette;
-			arena.materials.forEach((mat, name)=>createMat(name, mat, arenaPalette, arena.name));
-		}
-		(await mtiPromise).forEach((mat, name)=> createMat(name, mat, firstArenaPalette!));
+		const dti = await dtiPromise;
+		const mto = await mtoPromise;
 
-		return new MdkRenderer(mats);
+		let previewPalette: Uint8Array | null = null;
+		const arenaPalettes = new Map<string, GfxSamplerBinding>();
+		mto.arenas.forEach((arena, arenaName) => {
+			const arenaPalette = mergePalettes(dti.levelPalette, arena.palettePart, 4 * 16 * 3);
+			if (!previewPalette)
+				previewPalette = arenaPalette;
+
+			const arenaPaletteTex = renderer.createTexture(arenaName + " Palette", 0x100, 1, GfxFormat.U8_RGB_NORM, arenaPalette);
+			arenaPalettes.set(arenaName, arenaPaletteTex);
+
+			addTextures(arena.materials.textures, arenaPalette);
+		});
+		const mti = await mtiPromise;
+		addTextures(mti.textures, previewPalette!);
+
+		return renderer;
 	}
 }
 
@@ -93,4 +157,3 @@ export const sceneGroup: SceneGroup = {
 		new MdkSceneDesc("LEVEL8", "Level 8"),
 	]
 };
-
