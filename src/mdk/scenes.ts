@@ -128,16 +128,16 @@ class MdkSceneDesc implements SceneDesc {
 
 		let previewPalette: Uint8Array | null = null;
 		const arenaPalettes = new Map<string, GfxSamplerBinding>();
-		mto.arenas.forEach((arena, arenaName) => {
+		for (const arena of mto.arenas) {
 			const arenaPalette = mergePalettes(dti.levelPalette, arena.palettePart, 4 * 16 * 3);
 			if (!previewPalette)
 				previewPalette = arenaPalette;
 
-			const arenaPaletteTex = renderer.createTexture(arenaName + " Palette", 0x100, 1, GfxFormat.U8_RGB_NORM, arenaPalette);
-			arenaPalettes.set(arenaName, arenaPaletteTex);
+			const arenaPaletteTex = renderer.createTexture(arena.name + " Palette", 0x100, 1, GfxFormat.U8_RGB_NORM, arenaPalette);
+			arenaPalettes.set(arena.name, arenaPaletteTex);
 
 			addTextures(arena.materials.textures, arenaPalette);
-		});
+		}
 		const mti = await mtiPromise;
 		addTextures(mti.textures, previewPalette!);
 

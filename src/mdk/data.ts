@@ -18,20 +18,21 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 }
 
 type MtoData = {
-	arenas: Map<string, MtoArenaData>,
+	arenas: MtoArenaData[],
 	materials: MtiData, // union of all arena materials
 };
 type MtoArenaData = {
+	name: string,
 	palettePart: Uint8Array, // 16x7 pixels
 	bsp: BspData,
-	meshes: Map<string, RawMesh>,
+	meshes: RawMesh[],
 	materials: MtiData,
 };
 export function parseMto(file: ArrayBufferSlice): MtoData {
 	const data = file.createDataView();
 
 	const numArenas = data.getUint32(20, true);
-	const arenas = new Map<string, MtoArenaData>();
+	const arenas = new Array<MtoArenaData>(numArenas);
 
 	const allMaterials: MtiData = {
 		textures: new Map(),
@@ -39,7 +40,7 @@ export function parseMto(file: ArrayBufferSlice): MtoData {
 	};
 
 	for (let i = 0; i < numArenas; ++i) {
-		const name = readString(file, 24 + i * 12, 8);
+		const arenaName = readString(file, 24 + i * 12, 8);
 		const arenaOffset = data.getUint32(32 + i * 12, true) + 4;
 
 		const dataOffset = data.getUint32(arenaOffset, true) + arenaOffset + 4;
@@ -53,20 +54,20 @@ export function parseMto(file: ArrayBufferSlice): MtoData {
 		const numMeshes = data.getUint32(dataOffset + 4, true);
 		//const numSounds = data.getUint32(dataOffset + 8, true);
 
-		const meshes = new Map<string, RawMesh>();
+		const meshes = new Array(numMeshes);
 		const meshIndexOffset = dataOffset + 12 + numAnimations * 12;
 		for (let meshIndex = 0; meshIndex < numMeshes; ++meshIndex) {
 			const meshName = readString(file, meshIndexOffset + meshIndex * 12, 8);
 			const meshOffset = data.getUint32(meshIndexOffset + meshIndex * 12 + 8, true);
 			const isMeshGroup = data.getUint32(dataOffset + meshOffset, true) !== 0;
-			meshes.set(meshName, parseMesh(file.slice(dataOffset + meshOffset + 4), isMeshGroup));
+			meshes[meshIndex] = parseMesh(meshName, file.slice(dataOffset + meshOffset + 4), isMeshGroup);
 		}
 
 
 		const palettePart = file.createTypedArray(Uint8Array, palOffset, 7 * 16 * 3);
-		const bsp = parseBsp(file.subarray(bspOffset));
+		const bsp = parseBsp(arenaName, file.subarray(bspOffset));
 
-		arenas.set(name, { palettePart, bsp, meshes, materials: arenaMaterials });
+		arenas[i] = { name: arenaName, palettePart, bsp, meshes, materials: arenaMaterials };
 	}
 
 	return { arenas, materials: allMaterials };
@@ -74,6 +75,7 @@ export function parseMto(file: ArrayBufferSlice): MtoData {
 
 
 export type RawMesh = {
+	name: string,
 	materials: string[],
 	parts: RawMeshPart[],
 	bbox: AABB,
@@ -127,7 +129,7 @@ function readVerts(file: ArrayBufferSlice, offset: number, numVerts: number): Fl
 	return result;
 }
 
-function parseMesh(file: ArrayBufferSlice, isMeshGroup: boolean): RawMesh {
+function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): RawMesh {
 	const data = file.createDataView();
 
 	const numMaterials = data.getUint32(0, true);
@@ -200,11 +202,11 @@ function parseMesh(file: ArrayBufferSlice, isMeshGroup: boolean): RawMesh {
 
 	// todo extra trailing data
 
-	return { materials, parts, bbox };
+	return { name, materials, parts, bbox };
 }
 
 type BspData = RawMesh;
-function parseBsp(file: ArrayBufferSlice): BspData {
+function parseBsp(name: string, file: ArrayBufferSlice): BspData {
 	const data = file.createDataView();
 
 	const numMaterials = data.getUint32(0, true);
@@ -242,15 +244,15 @@ function parseBsp(file: ArrayBufferSlice): BspData {
 
 	const bbox = calculateAABB(verts, numVerts);
 
-	return { materials, parts: [{ name: "", origin: [0, 0, 0], verts, indices, uvs, materialIndices, flags, bbox }], bbox };
+	return { name, materials, parts: [{ name: "", origin: [0, 0, 0], verts, indices, uvs, materialIndices, flags, bbox }], bbox };
 }
 
-export function parseSni(file: ArrayBufferSlice): Map<string, BspData> {
+export function parseSni(file: ArrayBufferSlice): BspData[] {
 	const data = file.createDataView();
 
 	const numEntries = data.getUint32(20, true);
 
-	const bsps = new Map<string, BspData>();
+	const bsps: BspData[] = [];
 	//const animations = new Map<string, ArrayBufferSlice>();
 	//const sounds = new Map<string, ArrayBufferSlice>();
 
@@ -263,7 +265,7 @@ export function parseSni(file: ArrayBufferSlice): Map<string, BspData> {
 		const entryData = file.subarray(offset, filesize);
 
 		if (type === 0) { // bsp
-			bsps.set(name, parseBsp(entryData));
+			bsps.push(parseBsp(name, entryData));
 		} else if (type === -1) { // player animation
 			//animations.set(name, entryData);
 		} else { // sound
