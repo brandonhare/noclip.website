@@ -97,10 +97,10 @@ export type RawMeshPart = {
 function readAABB(data: DataView, offset: number): AABB {
 	// swizzle yz
 	return new AABB(
-		data.getFloat32(offset, true), // min x
+		-data.getFloat32(offset, true), // min x
 		data.getFloat32(offset + 16, true), // min z
 		data.getFloat32(offset + 8, true), // min y
-		data.getFloat32(offset + 4, true), // max x
+		-data.getFloat32(offset + 4, true), // max x
 		data.getFloat32(offset + 20, true), // max z
 		data.getFloat32(offset + 12, true), // max y
 	);
@@ -122,7 +122,7 @@ function readVerts(file: ArrayBufferSlice, offset: number, numVerts: number): Fl
 	const src = file.createTypedArray(Float32Array, offset, numVerts * 3);
 	const result = new Float32Array(numVerts * 3);
 	for (let i = 0; i < numVerts * 3; i += 3) {
-		result[i] = src[i];
+		result[i] = -src[i];
 		result[i + 1] = src[i + 2]; // swizzle yz
 		result[i + 2] = src[i + 1];
 	}

@@ -81,14 +81,14 @@ class ObjectRenderer {
 			buffer : indexBuffer,
 			byteOffset : 0
 		};
-		
+
 	}
 
 	prepareToRender(renderer : MdkRenderer, renderInstManager : GfxRenderInstManager, viewerInput : ViewerRenderInput){
 
 		if (!this.visible || !viewerInput.camera.frustum.contains(this.aabb))
 			return;
-		
+
 		//const debugCanvas = DebugJunk.getDebugOverlayCanvas2D();
 		//DebugJunk.drawWorldSpaceAABB(debugCanvas, viewerInput.camera.clipFromWorldMatrix, this.aabb);
 
@@ -213,16 +213,16 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 
 	prepareToRender(device : GfxDevice, viewerInput : ViewerRenderInput){
 		const renderInstManager = this.renderHelper.renderInstManager;
-		
+
 		this.animationController.setTimeFromViewerInput(viewerInput);
-		
+
 		//viewerInput.camera.frustum.makeVisualizer();
-		
+
 		const template = this.renderHelper.pushTemplateRenderInst();
 		template.setGfxProgram(this.simpleShader);
 		template.setBindingLayouts([{numUniformBuffers: 2, numSamplers: 0}]);
 		template.setMegaStateFlags({
-			cullMode:GfxCullMode.Back
+			cullMode:GfxCullMode.Front
 		});
 		const sceneParamsUniformLocation = 0;
 		let offs = template.allocateUniformBuffer(sceneParamsUniformLocation, 16);

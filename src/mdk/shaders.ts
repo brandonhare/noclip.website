@@ -51,7 +51,7 @@ out vec3 v_WorldPosition;
 void main(){
 	vec4 worldPosition = Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0));
 	v_WorldPosition = worldPosition.xyz;
-	gl_Position = Mul(ub_WorldToClip, vec4(a_Position, 1.0));
+	gl_Position = Mul(ub_WorldToClip, worldPosition);
 }`;
 
 	const frag = `
