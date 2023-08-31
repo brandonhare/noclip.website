@@ -1,7 +1,13 @@
 import { GfxDevice, GfxProgram } from "../gfx/platform/GfxPlatform.js";
 import * as Shaders from "../gfx/shaderc/GfxShaderCompiler.js";
 
-export function createMainShader(device: GfxDevice): GfxProgram {
+function makeShader(device: GfxDevice, vert: string, frag: string): GfxProgram {
+	return device.createProgramSimple(
+		Shaders.preprocessProgram_GLSL(device.queryVendorInfo(), vert, frag)
+	);
+}
+
+export function createSolidColourShader(device: GfxDevice): GfxProgram {
 	const vert = `
 layout(std140) uniform ub_SceneParams {
 	Mat4x4 ub_WorldToClip;
@@ -12,28 +18,52 @@ layout(std140) uniform ub_InstanceParams {
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_UV;
-out vec2 v_TexCoord;
 
-void main(){
-	gl_Position = Mul(ub_WorldToClip, Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0)));
-	v_TexCoord = a_UV;
-}`;
-
-	const frag = `
-uniform sampler2D u_Texture;
 uniform sampler2D u_LUT;
 
-in vec2 v_TexCoord;
+out vec4 v_Colour;
 
 void main(){
-	float index = texture(SAMPLER_2D(u_Texture), v_TexCoord).r;
-	index = mix(${0.5 / 0x100}, ${(0x100 - 0.5) / 0x100}, index);
-	vec4 result = texture(SAMPLER_2D(u_LUT), vec2(index, 0.5));
-	gl_FragColor = result;
+	v_Colour = texture(SAMPLER_2D(u_LUT), a_UV);
+	vec4 worldPosition = Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0));
+	gl_Position = Mul(ub_WorldToClip, worldPosition);
 }`;
+	const frag = `
+in vec4 v_Colour;
+void main(){
+	gl_FragColor = v_Colour;
+}
+`;
+	return makeShader(device, vert, frag);
+}
 
-	const processed = Shaders.preprocessProgram_GLSL(device.queryVendorInfo(), vert, frag);
-	return device.createProgramSimple(processed);
+export function createTexturedShader(device: GfxDevice): GfxProgram {
+	const vert = `
+layout(std140) uniform ub_SceneParams {
+	Mat4x4 ub_WorldToClip;
+};
+layout(std140) uniform ub_InstanceParams {
+	Mat4x3 ub_ModelToWorld;
+};
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec2 a_UV;
+
+out vec2 v_UV;
+
+void main(){
+	vec4 worldPosition = Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0));
+	gl_Position = Mul(ub_WorldToClip, worldPosition);
+	v_UV = a_UV;
+}`;
+	const frag = `
+uniform sampler2D u_Texture;
+in vec2 v_UV;
+void main(){
+	gl_FragColor = texture(SAMPLER_2D(u_Texture), v_UV);
+}
+`;
+	return makeShader(device, vert, frag);
 }
 
 export function createDebugShader(device: GfxDevice): GfxProgram {
@@ -66,6 +96,5 @@ void main(){
 	gl_FragColor = vec4(abs(worldNormal), 1.0);
 }`;
 
-	const processed = Shaders.preprocessProgram_GLSL(device.queryVendorInfo(), vert, frag);
-	return device.createProgramSimple(processed);
+	return makeShader(device, vert, frag);
 }

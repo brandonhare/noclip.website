@@ -1,116 +1,166 @@
-import { mat4 } from "gl-matrix";
+import * as DebugJunk from "../DebugJunk.js";
+import { mat4, vec3 } from "gl-matrix";
 import AnimationController from "../AnimationController.js";
+import ArrayBufferSlice from "../ArrayBufferSlice.js";
+import { AABB } from "../Geometry.js";
 import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor, pushAntialiasingPostProcessPass } from "../gfx/helpers/RenderGraphHelpers.js";
+import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
 import { fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers.js";
-import { GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
+import { GfxBindingLayoutDescriptor, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper.js";
 import { GfxRenderInstManager, executeOnPass } from "../gfx/render/GfxRenderInstManager.js";
 import * as UI from "../ui.js";
-import { SceneGfx, ViewerRenderInput, Texture as ViewerTexture } from "../viewer.js";
-import { MtiTexture, RawMesh, parseDti, parseMti, parseMto, parseSni } from "./data.js";
+import { assert, assertExists } from "../util.js";
+import * as Viewer from "../viewer.js";
+import { MtiData, MtiTexture, RawMesh, parseDti, parseMti, parseMto, parseSni } from "./data.js";
 import * as Shaders from "./shaders.js";
-import { AABB } from "../Geometry.js";
-import * as DebugJunk from "../DebugJunk.js";
 
+type SizedTextureBinding = GfxSamplerBinding & { width: number, height: number; };
+type ObjectMaterial = {
+	shader: GfxProgram,
+	textures: SizedTextureBinding[];
+	bindingLayouts: GfxBindingLayoutDescriptor[];
+};
 
-function createCanvasTexture(name: string, width: number, height: number, pixels: Uint8Array, palette: Uint8Array): ViewerTexture {
-	const canvas = document.createElement("canvas");
-	canvas.width = width;
-	canvas.height = height;
-	const ctx = canvas.getContext("2d")!;
-	const imgData = ctx.getImageData(0, 0, width, height);
-	const dest = imgData.data;
-	for (let i = 0; i < width * height; ++i) {
-		const p = pixels[i] * 3;
-		dest[i * 4] = palette[p];
-		dest[i * 4 + 1] = palette[p + 1];
-		dest[i * 4 + 2] = palette[p + 2];
-		dest[i * 4 + 3] = (p === 0) ? 0 : 255;
-	}
-	ctx.putImageData(imgData, 0, 0);
-	return {
-		name,
-		surfaces: [canvas]
-	};
-}
-
+type ObjectPrimitive = {
+	material: ObjectMaterial;
+	numIndices: number;
+	inputLayout: GfxInputLayout,
+	vertexBuffers: GfxVertexBufferDescriptor[];
+	indexBuffer: GfxIndexBufferDescriptor;
+};
+type ObjectPart = {
+	name: string;
+	origin: vec3;
+	bbox: AABB;
+	primitives: ObjectPrimitive[];
+};
 class ObjectRenderer {
+	name: string;
+	bbox: AABB;
+	parts: ObjectPart[];
+	vertexBuffer: GfxBuffer;
+	indexBuffer: GfxBuffer;
 
-	name : string;
-	visible = true;
-	numIndexes : number;
-	worldTransform : mat4;
-	aabb : AABB;
-
-	vertexBuffers : GfxVertexBufferDescriptor[];
-	indexBuffer : GfxIndexBufferDescriptor;
-
-	constructor(device : GfxDevice, mesh : RawMesh){
+	constructor(renderer: MdkRenderer, device: GfxDevice, mesh: RawMesh, materialCache: MaterialCreator) {
 		this.name = mesh.name;
+		this.bbox = mesh.bbox;
+
 		let numVertWords = 0;
+		let numUvWords = 0;
 		let numIndices = 0;
-		for (const part of mesh.parts){
-			numVertWords += part.verts.length;
-			numIndices += part.indices.length;
-		}
-		this.numIndexes = numIndices;
 
-		this.aabb = mesh.bbox.clone();
-
-		this.worldTransform = mat4.create();
-		//this.worldTransform = mat4.fromScaling(mat4.create(), [0.01, 0.01, 0.01]);
-
-		const vertexBuffer = device.createBuffer(numVertWords, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static);
-		const indexBuffer = device.createBuffer(numIndices / 2, GfxBufferUsage.Index, GfxBufferFrequencyHint.Static);
-		let vertOffset = 0;
-		let indexOffset = 0;
-		for (const part of mesh.parts){
-			device.uploadBufferData(vertexBuffer, vertOffset, new Uint8Array(part.verts.buffer));
-			device.uploadBufferData(indexBuffer, indexOffset, new Uint8Array(part.indices.buffer));
-			vertOffset += part.verts.byteLength;
-			indexOffset += part.indices.byteLength;
+		for (const part of mesh.parts) {
+			for (const prim of part.primitives) {
+				numVertWords += prim.positions.length;
+				numUvWords += prim.uvs.length;
+				numIndices += prim.indices.length;
+			}
 		}
 
-		this.vertexBuffers = [{
-			buffer : vertexBuffer,
-			byteOffset : 0
-		}];
-		this.indexBuffer = {
-			buffer : indexBuffer,
-			byteOffset : 0
-		};
+		const vertexBuffer = device.createBuffer(numVertWords + numUvWords, GfxBufferUsage.Vertex, GfxBufferFrequencyHint.Static);
+		const indexBuffer = device.createBuffer(Math.ceil(numIndices / 2), GfxBufferUsage.Index, GfxBufferFrequencyHint.Static);
+		let vertexBufferByteOffset = 0;
+		let indexBufferByteOffset = 0;
 
+		this.vertexBuffer = vertexBuffer;
+		this.indexBuffer = indexBuffer;
+
+		this.parts = mesh.parts.map(part => {
+			return {
+				name: part.name,
+				origin: part.origin,
+				bbox: part.bbox,
+				primitives: part.primitives.map(prim => {
+					const material = materialCache.getMaterial(prim.material);
+
+					if (!prim.uvsAdjusted) {
+						if (material.textures.length !== 0) {
+							const uScale = 1 / material.textures[0].width;
+							const vScale = 1 / material.textures[0].height;
+							for (let i = 0; i < prim.uvs.length; i += 2) {
+								prim.uvs[i] *= uScale;
+								prim.uvs[i + 1] *= vScale;
+							}
+						}
+						prim.uvsAdjusted = true;
+					}
+
+					const positionBufferStart = vertexBufferByteOffset;
+					const uvBufferStart = positionBufferStart + prim.positions.byteLength;
+					const indexBufferStart = indexBufferByteOffset;
+
+					device.uploadBufferData(vertexBuffer, positionBufferStart, new Uint8Array(prim.positions.buffer));
+					device.uploadBufferData(vertexBuffer, uvBufferStart, new Uint8Array(prim.uvs.buffer));
+					device.uploadBufferData(indexBuffer, indexBufferStart, new Uint8Array(prim.indices.buffer));
+
+					vertexBufferByteOffset = uvBufferStart + prim.uvs.byteLength;
+					indexBufferByteOffset = indexBufferStart + prim.indices.byteLength;
+
+					return {
+						material,
+						numIndices: prim.indices.length,
+						inputLayout: renderer.inputLayout_PosUv,
+						vertexBuffers: [{
+							buffer: vertexBuffer,
+							byteOffset: positionBufferStart
+						}, {
+							buffer: vertexBuffer,
+							byteOffset: uvBufferStart
+						}],
+						indexBuffer: {
+							buffer: indexBuffer,
+							byteOffset: indexBufferStart
+						}
+					};
+				})
+			};
+		});
 	}
 
-	prepareToRender(renderer : MdkRenderer, renderInstManager : GfxRenderInstManager, viewerInput : ViewerRenderInput){
+	prepareToRender(renderer: MdkRenderer, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput) {
 
-		if (!this.visible || !viewerInput.camera.frustum.contains(this.aabb))
-			return;
+		//if (!this.visible || !viewerInput.camera.frustum.contains(this.aabb))
+		//	return;
 
 		//const debugCanvas = DebugJunk.getDebugOverlayCanvas2D();
 		//DebugJunk.drawWorldSpaceAABB(debugCanvas, viewerInput.camera.clipFromWorldMatrix, this.aabb);
 
-		const inst = renderInstManager.newRenderInst();
+		for (const part of this.parts) {
+			for (const prim of part.primitives) {
 
-		let off = inst.allocateUniformBuffer(1, 12);
-		fillMatrix4x3(inst.mapUniformBufferF32(1), off, this.worldTransform);
+				const inst = renderInstManager.newRenderInst();
 
-		inst.drawIndexes(this.numIndexes);
-		inst.setVertexInput(renderer.simpleInputLayout, this.vertexBuffers, this.indexBuffer);
+				let off = inst.allocateUniformBuffer(1, 12);
 
-		renderInstManager.submitRenderInst(inst);
+				off += fillMatrix4x3(inst.mapUniformBufferF32(1), off, mat4.fromXRotation(mat4.create(), Math.PI * -0.5));
+
+				const material = prim.material;
+
+				inst.setGfxProgram(material.shader);
+				inst.setSamplerBindingsFromTextureMappings(material.textures);
+				inst.setBindingLayouts(material.bindingLayouts);
+
+				assert(material.textures.length === material.bindingLayouts[0].numSamplers);
+
+				inst.setVertexInput(prim.inputLayout, prim.vertexBuffers, prim.indexBuffer);
+				inst.drawIndexes(prim.numIndices);
+
+				renderInstManager.submitRenderInst(inst);
+
+			}
+		}
 	}
 
-	destroy(device : GfxDevice){
-		device.destroyBuffer(this.indexBuffer.buffer);
-		for (const buf of this.vertexBuffers)
-			device.destroyBuffer(buf.buffer);
+	destroy(device: GfxDevice) {
+		device.destroyBuffer(this.indexBuffer);
+		device.destroyBuffer(this.vertexBuffer);
 	}
 }
 
-
+/*
 class ObjectPanel extends UI.Panel {
 	constructor(renderer : MdkRenderer){
 		super();
@@ -125,45 +175,59 @@ class ObjectPanel extends UI.Panel {
 		}
 	}
 }
+*/
 
-class MdkRenderer implements SceneGfx, UI.TextureListHolder {
-	viewerTextures: ViewerTexture[] = [];
+class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
+	viewerTextures: Viewer.Texture[] = [];
 	textureHolder = this;
 	onnewtextures: (() => void) | null = null;
 
 	device: GfxDevice;
+	animationController: AnimationController;
+	renderHelper: GfxRenderHelper;
+
 	textures: GfxTexture[] = [];
-	pointSampler: GfxSampler;
-	lookupTexture: GfxSamplerBinding;
+	sampler_Nearest: GfxSampler;
+	sampler_Bilinear: GfxSampler;
+	inputLayout_PosUv: GfxInputLayout;
+	shader_Debug: GfxProgram;
+	shader_SolidColour: GfxProgram;
+	shader_Textured: GfxProgram;
 
-	animationController : AnimationController;
-	renderHelper : GfxRenderHelper;
-	simpleShader : GfxProgram;
+	objects: ObjectRenderer[] = [];
 
-	simpleInputLayout : GfxInputLayout; // destroyed by helper
-
-	objects : ObjectRenderer[] = [];
-
-	constructor(device: GfxDevice, context : SceneContext) {
+	constructor(device: GfxDevice, context: SceneContext) {
 		this.device = device;
 
 		this.animationController = new AnimationController();
 		this.renderHelper = new GfxRenderHelper(device, context);
 
-		this.pointSampler = device.createSampler({
+		this.sampler_Nearest = device.createSampler({
 			wrapS: GfxWrapMode.Repeat,
 			wrapT: GfxWrapMode.Repeat,
 			minFilter: GfxTexFilterMode.Point,
 			magFilter: GfxTexFilterMode.Point,
-			mipFilter: GfxMipFilterMode.Nearest
+			mipFilter: GfxMipFilterMode.Nearest,
+		});
+		this.sampler_Bilinear = device.createSampler({
+			wrapS: GfxWrapMode.Repeat,
+			wrapT: GfxWrapMode.Repeat,
+			minFilter: GfxTexFilterMode.Bilinear,
+			magFilter: GfxTexFilterMode.Bilinear,
+			mipFilter: GfxMipFilterMode.Linear,
 		});
 
-		this.simpleShader = Shaders.createDebugShader(device);
+		this.shader_Debug = Shaders.createDebugShader(device);
+		this.shader_SolidColour = Shaders.createSolidColourShader(device);
+		this.shader_Textured = Shaders.createTexturedShader(device);
 
-		this.simpleInputLayout = this.renderHelper.renderCache.createInputLayout({
+		this.inputLayout_PosUv = device.createInputLayout({
 			indexBufferFormat: GfxFormat.U16_R,
 			vertexBufferDescriptors: [{
 				byteStride: 12,
+				frequency: GfxVertexBufferFrequency.PerVertex,
+			}, {
+				byteStride: 8,
 				frequency: GfxVertexBufferFrequency.PerVertex,
 			}],
 			vertexAttributeDescriptors: [{
@@ -171,21 +235,25 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 				format: GfxFormat.F32_RGB,
 				bufferIndex: 0,
 				bufferByteOffset: 0
+			}, {
+				location: 1,
+				format: GfxFormat.F32_RG,
+				bufferIndex: 1,
+				bufferByteOffset: 0
 			}]
 		});
-
-		const lookupData = new Uint8Array(0x100);
-		for (let i = 0; i < 0x100; ++i)
-			lookupData[i] = i;
-		this.lookupTexture = this.createTexture("ColourLookupTex", 0x100, 1, GfxFormat.U8_R_NORM, lookupData);
 	}
 
-
+	/*
 	createPanels(): UI.Panel[] {
 		return [new ObjectPanel(this)]
 	}
+	*/
 
-	createTexture(name: string, width: number, height: number, pixelFormat: GfxFormat, pixels: Uint8Array): GfxSamplerBinding {
+	createTexture(name: string, width: number, height: number, pixelFormat: GfxFormat, pixels: Uint8Array, filtered: boolean, createPreview: boolean): SizedTextureBinding {
+
+		assert(pixelFormat === GfxFormat.U8_RGBA_NORM || pixelFormat === GfxFormat.U8_RGB_NORM, "invalid texture pixel format");
+
 		const gfxTexture = this.device.createTexture({
 			dimension: GfxTextureDimension.n2D,
 			pixelFormat,
@@ -195,23 +263,23 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 			numLevels: 1,
 			usage: GfxTextureUsage.Sampled
 		});
-		this.device.setResourceName(gfxTexture, name);
+		//this.device.setResourceName(gfxTexture, name);
 		this.device.uploadTextureData(gfxTexture, 0, [pixels]);
 		this.textures.push(gfxTexture);
 
+		if (createPreview) {
+			this.viewerTextures.push({ name, surfaces: [convertToCanvas(new ArrayBufferSlice(pixels.buffer), width, height)] });
+		}
+
 		return {
 			gfxTexture,
-			gfxSampler: this.pointSampler,
-			lateBinding: null
+			gfxSampler: filtered ? this.sampler_Bilinear : this.sampler_Nearest,
+			lateBinding: null,
+			width, height,
 		};
 	}
 
-	createGreyscaleTextureWithPreview(name: string, width: number, height: number, pixels: Uint8Array, palette: Uint8Array): GfxSamplerBinding {
-		this.viewerTextures.push(createCanvasTexture(name, width, height, pixels, palette));
-		return this.createTexture(name, width, height, GfxFormat.U8_R_NORM, pixels);
-	}
-
-	prepareToRender(device : GfxDevice, viewerInput : ViewerRenderInput){
+	prepareToRender(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput) {
 		const renderInstManager = this.renderHelper.renderInstManager;
 
 		this.animationController.setTimeFromViewerInput(viewerInput);
@@ -219,10 +287,10 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 		//viewerInput.camera.frustum.makeVisualizer();
 
 		const template = this.renderHelper.pushTemplateRenderInst();
-		template.setGfxProgram(this.simpleShader);
-		template.setBindingLayouts([{numUniformBuffers: 2, numSamplers: 0}]);
+		//template.setGfxProgram(this.simpleShader);
+		template.setBindingLayouts([{ numUniformBuffers: 2, numSamplers: 0 }]);
 		template.setMegaStateFlags({
-			cullMode:GfxCullMode.Front
+			cullMode: GfxCullMode.Front
 		});
 		const sceneParamsUniformLocation = 0;
 		let offs = template.allocateUniformBuffer(sceneParamsUniformLocation, 16);
@@ -236,7 +304,7 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 
 		this.renderHelper.prepareToRender();
 	}
-	render(device: GfxDevice, viewerInput: ViewerRenderInput) {
+	render(device: GfxDevice, viewerInput: Viewer.ViewerRenderInput) {
 		const renderInstManager = this.renderHelper.renderInstManager;
 		const builder = this.renderHelper.renderGraph.newGraphBuilder();
 
@@ -263,19 +331,101 @@ class MdkRenderer implements SceneGfx, UI.TextureListHolder {
 	destroy(device: GfxDevice) {
 		for (const object of this.objects)
 			object.destroy(device);
-		device.destroyProgram(this.simpleShader);
+		device.destroyProgram(this.shader_Debug);
+		device.destroyProgram(this.shader_SolidColour);
+		device.destroyProgram(this.shader_Textured);
+		device.destroyInputLayout(this.inputLayout_PosUv);
 		for (const tex of this.textures) {
 			device.destroyTexture(tex);
 		}
-		device.destroySampler(this.pointSampler);
+		device.destroySampler(this.sampler_Nearest);
+		device.destroySampler(this.sampler_Bilinear);
 		this.renderHelper.destroy();
 	}
 }
 
-function mergePalettes(base: Uint8Array, target: Uint8Array, offsetBytes: number): Uint8Array {
-	const result = new Uint8Array(base);
-	result.set(target, offsetBytes);
-	return result;
+class MaterialCreator {
+	renderer: MdkRenderer;
+	materials = new Map<string, MtiTexture & { material: ObjectMaterial | null; }>();
+	strangeMaterialDefs = new Map<string, number>();
+	levelPalette: Uint8Array;
+	arenaPalette: Uint8Array;
+	arenaName: string = "";
+	solidColourMaterial: ObjectMaterial | null = null;
+
+	debugMaterial: ObjectMaterial;
+	bindingLayout_2_1: GfxBindingLayoutDescriptor[] = [{
+		numUniformBuffers: 2,
+		numSamplers: 1,
+	}];
+
+	constructor(renderer: MdkRenderer, sharedMaterials: MtiData, levelMaterials: MtiData, levelPalette: Uint8Array) {
+		this.renderer = renderer;
+		this.renderer = renderer;
+		this.levelPalette = levelPalette;
+
+		sharedMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
+		sharedMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
+
+		levelMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
+		levelMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
+
+		this.arenaPalette = new Uint8Array(0x300);
+
+		this.debugMaterial = {
+			shader: renderer.shader_Debug,
+			bindingLayouts: [{ numUniformBuffers: 2, numSamplers: 0 }],
+			textures: []
+		};
+	}
+
+	setArena(arenaName: string, arenaMaterials: MtiData, arenaPalette: Uint8Array) {
+		this.arenaName = arenaName;
+		this.arenaPalette.set(this.levelPalette);
+		this.arenaPalette.set(arenaPalette, 4 * 16 * 3);
+		this.solidColourMaterial = null;
+
+		arenaMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
+		arenaMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
+	}
+
+	getMaterial(name: string | number): ObjectMaterial {
+		if (name === 0x10000) { // solid colour todo better identifier
+			if (!this.solidColourMaterial) {
+				this.solidColourMaterial = {
+					shader: this.renderer.shader_SolidColour,
+					bindingLayouts: this.bindingLayout_2_1,
+					textures: [this.renderer.createTexture(this.arenaName, 0x100, 1, GfxFormat.U8_RGB_NORM, this.arenaPalette, false, false)]
+				};
+			}
+			return this.solidColourMaterial;
+		} else if (typeof (name) !== "string") { // unknown
+			return this.debugMaterial;
+		} else { // textured
+			const result = this.materials.get(name);
+			if (!result) {
+				console.log("failed to find material", name, "on arena", this.arenaName);
+				return this.debugMaterial;
+			}
+			if (!result.material) {
+				const textureData = new Uint8Array(4 * result.width * result.height);
+				const palette = this.arenaPalette;
+				for (let i = 1; i < result.pixels.length; ++i) {
+					const p = result.pixels[i] * 3;
+					textureData[i * 4] = palette[p];
+					textureData[i * 4 + 1] = palette[p + 1];
+					textureData[i * 4 + 2] = palette[p + 2];
+					textureData[i * 4 + 3] = 0xFF;
+				}
+				result.material = {
+					bindingLayouts: this.bindingLayout_2_1,
+					shader: this.renderer.shader_Textured,
+					textures: [this.renderer.createTexture(name, result.width, result.height, GfxFormat.U8_RGBA_NORM, textureData, true, true)]
+				};
+			}
+			return result.material;
+		}
+	}
 }
 
 class MdkSceneDesc implements SceneDesc {
@@ -285,72 +435,40 @@ class MdkSceneDesc implements SceneDesc {
 		const dataFetcher = context.dataFetcher;
 
 		const path = `mdk/TRAVERSE/${this.id}/${this.id}`;
-		//const dtiPromise = dataFetcher.fetchData(path + ".DTI").then(parseDti);
+		const dtiPromise = dataFetcher.fetchData(path + ".DTI").then(parseDti);
+		const mtiPromise = dataFetcher.fetchData(path + "S.MTI").then(parseMti);
 		const mtoPromise = dataFetcher.fetchData(path + "O.MTO").then(parseMto);
-		//const mtiPromise = dataFetcher.fetchData(path + "S.MTI").then(parseMti);
 		const sniPromise = dataFetcher.fetchData(path + "O.SNI").then(parseSni);
 
-		const renderer = new MdkRenderer(device, context);
-
-
+		const dti = await dtiPromise;
+		const mti = await mtiPromise;
 		const mto = await mtoPromise;
-		for (const arena of mto.arenas){
-			renderer.objects.push(new ObjectRenderer(device, arena.bsp));
-		}
 		const sni = await sniPromise;
-		for (const bsp of sni) {
-			renderer.objects.push(new ObjectRenderer(device, bsp));
-		}
+
+		const renderer = new MdkRenderer(device, context);
+		const materialCreator = new MaterialCreator(renderer, mti, mto.materials, dti.levelPalette);
+
 		const unused = [
 			"DANT_8",
-			"CDANT_8",
 			"GUNT_9",
-			"CGUNT_8",
 			"HMO_7",
-			"CHMO_3",
-			"CHMO_7",
 			"OLYM_9",
-			"COLYM_9",
 		];
-		for (const object of renderer.objects)
-			object.visible = !unused.includes(object.name);
 
-
-
-		/*
-		const materials = new Map<string, { binding: GfxSamplerBinding, width: number, height: number; }>();
-
-		function addTextures(map: Map<string, MtiTexture>, palette: Uint8Array) {
-			map.forEach((tex, name) => {
-				if (!materials.has(name)) {
-					const binding = renderer.createGreyscaleTextureWithPreview(name, tex.width, tex.height, tex.pixels, palette);
-					materials.set(name, {
-						binding,
-						width: tex.width,
-						height: tex.height
-					});
-				}
-			});
-		}
-
-		const dti = await dtiPromise;
-		const mto = await mtoPromise;
-
-		let previewPalette: Uint8Array | null = null;
-		const arenaPalettes = new Map<string, GfxSamplerBinding>();
 		for (const arena of mto.arenas) {
-			const arenaPalette = mergePalettes(dti.levelPalette, arena.palettePart, 4 * 16 * 3);
-			if (!previewPalette)
-				previewPalette = arenaPalette;
+			if (unused.includes(arena.name))
+				continue;
+			materialCreator.setArena(arena.name, arena.materials, arena.palettePart);
+			renderer.objects.push(new ObjectRenderer(renderer, device, arena.bsp, materialCreator));
 
-			const arenaPaletteTex = renderer.createTexture(arena.name + " Palette", 0x100, 1, GfxFormat.U8_RGB_NORM, arenaPalette);
-			arenaPalettes.set(arena.name, arenaPaletteTex);
-
-			addTextures(arena.materials.textures, arenaPalette);
+			const targetName = "C" + arena.name;
+			for (const sniMesh of sni) {
+				if (sniMesh.name === targetName) {
+					renderer.objects.push(new ObjectRenderer(renderer, device, sniMesh, materialCreator));
+					break;
+				}
+			}
 		}
-		const mti = await mtiPromise;
-		addTextures(mti.textures, previewPalette!);
-		*/
 
 		return renderer;
 	}

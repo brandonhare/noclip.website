@@ -1,7 +1,7 @@
 import { vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { AABB } from "../Geometry.js";
-import { align, assert, readString } from "../util.js";
+import { align, assert, assertExists, readString } from "../util.js";
 
 type DtiData = {
 	levelPalette: Uint8Array,
@@ -82,27 +82,26 @@ export type RawMesh = {
 };
 export type RawMeshPart = {
 	name: string,
-	origin: vec3,
+	primitives: RawMeshPrimitive[],
 	bbox: AABB,
-
-	verts: Float32Array,
-
-	// per-triangle properties
+	origin: vec3,
+};
+export type RawMeshPrimitive = {
+	material: string | number,
 	indices: Uint16Array,
-	uvs: Float32Array;
-	materialIndices: Int16Array,
-	flags: Int32Array; // todo what are these
+	positions: Float32Array,
+	uvs: Float32Array,
+	uvsAdjusted: boolean,
 };
 
 function readAABB(data: DataView, offset: number): AABB {
-	// swizzle yz
 	return new AABB(
-		-data.getFloat32(offset, true), // min x
-		data.getFloat32(offset + 16, true), // min z
+		data.getFloat32(offset, true), // min x
 		data.getFloat32(offset + 8, true), // min y
-		-data.getFloat32(offset + 4, true), // max x
-		data.getFloat32(offset + 20, true), // max z
+		data.getFloat32(offset + 16, true), // min z
+		data.getFloat32(offset + 4, true), // max x
 		data.getFloat32(offset + 12, true), // max y
+		data.getFloat32(offset + 20, true), // max z
 	);
 }
 
@@ -119,14 +118,106 @@ function calculateAABB(points: ArrayLike<number>, numPoints: number): AABB {
 }
 
 function readVerts(file: ArrayBufferSlice, offset: number, numVerts: number): Float32Array {
-	const src = file.createTypedArray(Float32Array, offset, numVerts * 3);
-	const result = new Float32Array(numVerts * 3);
-	for (let i = 0; i < numVerts * 3; i += 3) {
-		result[i] = -src[i];
-		result[i + 1] = src[i + 2]; // swizzle yz
-		result[i + 2] = src[i + 1];
+	return file.createTypedArray(Float32Array, offset, numVerts * 3);
+}
+
+function parseMeshData(name: string, materials: string[], data: DataView, startOffset: number, numTris: number, verts: Float32Array): RawMeshPrimitive[] {
+
+	type RawPrim = {
+		material: string | number,
+		indices: number[],
+		verts: number[],
+		uvs: number[],
+		seenVerts: Map<number, [number, number, number][]>,
+	};
+
+	function newRawPrim(material: string | number): RawPrim {
+		return {
+			material,
+			indices: [],
+			verts: [],
+			uvs: [],
+			seenVerts: new Map()
+		};
 	}
-	return result;
+
+	const rawPrims = materials.map(newRawPrim);
+	const solidPrim = newRawPrim(0x10000); // todo make a better solid colour flag
+	rawPrims.push(solidPrim);
+	const specialPrims = new Map<number, RawPrim>();
+
+	const endOffset = startOffset + numTris * 36;
+	for (let offset = startOffset; offset != endOffset; offset += 36) {
+		const i1 = data.getUint16(offset, true);
+		const i2 = data.getUint16(offset + 2, true);
+		const i3 = data.getUint16(offset + 4, true);
+		if (i1 === i2 || i1 === i3 || i2 === i3) {
+			continue;
+		}
+		const materialIndex = data.getUint16(offset + 6, true);
+		//const flags = data.getUint32(offset + 32, true); // todo what are these
+
+		let prim: RawPrim | undefined;
+		let isSolid = false;
+		if (materialIndex >= 0 && materialIndex < materials.length)
+			prim = assertExists(rawPrims[materialIndex]);
+		else if (materialIndex > -256) {
+			prim = solidPrim;
+			isSolid = true;
+		} else {
+			prim = specialPrims.get(materialIndex);
+			if (!prim) {
+				prim = newRawPrim(materialIndex);
+				rawPrims.push(prim);
+				specialPrims.set(materialIndex, prim);
+			}
+		}
+
+		for (let j = 0; j < 3; ++j) {
+			const index = data.getUint16(offset + 2 * j, true);
+			let u: number;
+			let v: number;
+			if (isSolid) {
+				u = -materialIndex;
+				v = 0.5;
+			} else {
+				u = data.getFloat32(offset + 8 + j * 8, true);
+				v = data.getFloat32(offset + 8 + j * 8 + 4, true);
+			}
+			let seenVertList = prim.seenVerts.get(index);
+			if (!seenVertList) {
+				seenVertList = [];
+				prim.seenVerts.set(index, seenVertList);
+			} else {
+				let found = false;
+				for (const list of seenVertList) {
+					if (Math.abs(list[0] - u) <= 0.001 && Math.abs(list[1] - v) <= 0.001) {
+						found = true;
+						prim.indices.push(list[2]);
+						break;
+					}
+				}
+				if (found)
+					continue;
+			}
+
+			const newVertIndex = prim.verts.length / 3;
+			seenVertList.push([u, v, newVertIndex]);
+			prim.indices.push(newVertIndex);
+			prim.verts.push(verts[index * 3], verts[index * 3 + 1], verts[index * 3 + 2]);
+			prim.uvs.push(u, v);
+		}
+	}
+
+	return rawPrims.filter(prim => prim.indices.length).map(prim => {
+		return {
+			material: prim.material,
+			indices: new Uint16Array(prim.indices),
+			uvs: new Float32Array(prim.uvs),
+			positions: new Float32Array(prim.verts),
+			uvsAdjusted: false,
+		};
+	});
 }
 
 function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): RawMesh {
@@ -153,8 +244,8 @@ function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): 
 		if (isMeshGroup) {
 			name = readString(file, offset, 12);
 			origin[0] = data.getFloat32(offset + 12, true);
-			origin[1] = data.getFloat32(offset + 20, true); // swizzle yz
-			origin[2] = data.getFloat32(offset + 16, true);
+			origin[1] = data.getFloat32(offset + 16, true);
+			origin[2] = data.getFloat32(offset + 20, true);
 			offset += 24;
 		}
 
@@ -162,28 +253,8 @@ function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): 
 		const verts = readVerts(file, offset + 4, numVerts);
 		offset += 4 + numVerts * 12;
 
-		const numTris = data.getUint32(offset, true);
-		offset += 4;
-
-		const indices = new Uint16Array(numTris * 3);
-		const uvs = new Float32Array(numTris * 6);
-		const materialIndices = new Int16Array(numTris);
-		const flags = new Int32Array(numTris);
-		for (let triIndex = 0; triIndex < numTris; ++triIndex) {
-			for (let j = 0; j < 3; ++j)
-				indices[triIndex * 3 + j] = data.getUint16(offset + j * 2, true);
-			materialIndices[triIndex] = data.getUint16(offset + 6, true);
-			offset += 8;
-			for (let j = 0; j < 6; ++j)
-				uvs[triIndex * 6 + j] = data.getFloat32(offset + j * 4, true);
-			flags[triIndex] = data.getInt32(offset + 24, true);
-			offset += 28;
-		}
-
-		const bbox = readAABB(data, offset);
-		offset += 24;
-
 		// adjust to origin
+		/*
 		if (origin[0] || origin[1] || origin[2]) {
 			for (let i = 0; i < numVerts * 3; i += 3) {
 				verts[i] -= origin[0];
@@ -191,8 +262,17 @@ function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): 
 				verts[i + 2] -= origin[2];
 			}
 		}
+		*/
 
-		parts[meshIndex] = { name, origin, verts, indices, uvs, materialIndices, flags, bbox };
+		const numTris = data.getUint32(offset, true);
+		offset += 4;
+		const primitives = parseMeshData(name, materials, data, offset, numTris, verts);
+		offset += numTris * 36;
+
+		const bbox = readAABB(data, offset);
+		offset += 24;
+
+		parts[meshIndex] = { name, primitives, bbox, origin };
 	}
 
 	const bbox = isMeshGroup ? readAABB(data, offset) : parts[0].bbox;
@@ -221,30 +301,19 @@ function parseBsp(name: string, file: ArrayBufferSlice): BspData {
 	offset += 4 + numPlanes * 44;
 
 	const numTris = data.getUint32(offset, true);
-	offset += 4;
-
-	const indices = new Uint16Array(numTris * 3);
-	const uvs = new Float32Array(numTris * 6);
-	const materialIndices = new Int16Array(numTris);
-	const flags = new Int32Array(numTris);
-	for (let triIndex = 0; triIndex < numTris; ++triIndex) {
-		for (let j = 0; j < 3; ++j)
-			indices[triIndex * 3 + j] = data.getUint16(offset + j * 2, true);
-		materialIndices[triIndex] = data.getUint16(offset + 6, true);
-		offset += 8;
-		for (let j = 0; j < 6; ++j)
-			uvs[triIndex * 6 + j] = data.getFloat32(offset + j * 4, true);
-		flags[triIndex] = data.getInt32(offset + 24, true);
-		offset += 28;
-	}
+	const triOffset = offset + 4;
+	offset = triOffset + 36 * numTris;
 
 	const numVerts = data.getUint32(offset, true);
-	const verts = readVerts(file, offset + 4, numVerts);
-	offset += 4 + numVerts * 12;
+	offset += 4;
+	const verts = readVerts(file, offset, numVerts);
+	offset += numVerts * 12;
+
+	const primitives = parseMeshData(name, materials, data, triOffset, numTris, verts);
 
 	const bbox = calculateAABB(verts, numVerts);
 
-	return { name, materials, parts: [{ name: "", origin: [0, 0, 0], verts, indices, uvs, materialIndices, flags, bbox }], bbox };
+	return { name, materials, parts: [{ name, bbox, primitives, origin: [0, 0, 0] }], bbox };
 }
 
 export function parseSni(file: ArrayBufferSlice): BspData[] {
