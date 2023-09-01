@@ -397,6 +397,7 @@ class MaterialCreator {
 					bindingLayouts: this.bindingLayout_2_1,
 					textures: [this.renderer.createTexture(this.arenaName, 0x100, 1, GfxFormat.U8_RGB_NORM, this.arenaPalette, false, false)]
 				};
+				this.solidColourMaterial.textures[0].width = 1;
 			}
 			return this.solidColourMaterial;
 		} else if (typeof (name) !== "string") { // unknown

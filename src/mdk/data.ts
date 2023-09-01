@@ -154,14 +154,14 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 		if (i1 === i2 || i1 === i3 || i2 === i3) {
 			continue;
 		}
-		const materialIndex = data.getUint16(offset + 6, true);
+		const materialIndex = data.getInt16(offset + 6, true);
 		//const flags = data.getUint32(offset + 32, true); // todo what are these
 
 		let prim: RawPrim | undefined;
 		let isSolid = false;
-		if (materialIndex >= 0 && materialIndex < materials.length)
+		if (materialIndex >= 0 && materialIndex < materials.length) {
 			prim = assertExists(rawPrims[materialIndex]);
-		else if (materialIndex > -256) {
+		} else if (materialIndex > -256 && materialIndex < 0) {
 			prim = solidPrim;
 			isSolid = true;
 		} else {
@@ -179,7 +179,7 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 			let v: number;
 			if (isSolid) {
 				u = -materialIndex;
-				v = 0.5;
+				v = 0;
 			} else {
 				u = data.getFloat32(offset + 8 + j * 8, true);
 				v = data.getFloat32(offset + 8 + j * 8 + 4, true);

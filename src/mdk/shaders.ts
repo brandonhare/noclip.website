@@ -24,7 +24,7 @@ uniform sampler2D u_LUT;
 out vec4 v_Colour;
 
 void main(){
-	v_Colour = texture(SAMPLER_2D(u_LUT), a_UV);
+	v_Colour = texelFetch(SAMPLER_2D(u_LUT), ivec2(a_UV.x, 0), 0);
 	vec4 worldPosition = Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0));
 	gl_Position = Mul(ub_WorldToClip, worldPosition);
 }`;

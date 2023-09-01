@@ -1,0 +1,8 @@
+figure out all the weird materials
+check entities
+figure out skybox maths
+add skybox graphic
+look into bsp planes
+look into mesh flags property
+dont duplicate the same texture between arenas?
+try pow2 textures
