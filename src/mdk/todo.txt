@@ -5,4 +5,4 @@ add skybox graphic
 look into bsp planes
 look into mesh flags property
 dont duplicate the same texture between arenas?
-try pow2 textures
+fix weird bad bsp triangles

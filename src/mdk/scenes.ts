@@ -1,11 +1,9 @@
-import * as DebugJunk from "../DebugJunk.js";
 import { mat4, vec3 } from "gl-matrix";
 import AnimationController from "../AnimationController.js";
-import ArrayBufferSlice from "../ArrayBufferSlice.js";
+import * as DebugJunk from "../DebugJunk.js";
 import { AABB } from "../Geometry.js";
 import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor, pushAntialiasingPostProcessPass } from "../gfx/helpers/RenderGraphHelpers.js";
-import { convertToCanvas } from "../gfx/helpers/TextureConversionHelpers.js";
 import { fillMatrix4x3, fillMatrix4x4 } from "../gfx/helpers/UniformBufferHelpers.js";
 import { GfxBindingLayoutDescriptor, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
@@ -16,6 +14,19 @@ import { assert, assertExists } from "../util.js";
 import * as Viewer from "../viewer.js";
 import { MtiData, MtiTexture, RawMesh, parseDti, parseMti, parseMto, parseSni } from "./data.js";
 import * as Shaders from "./shaders.js";
+
+// todo does this exist in a util somewhere?
+function nextPow2(v: number) {
+	v--;
+	v |= v >> 1;
+	v |= v >> 2;
+	v |= v >> 4;
+	v |= v >> 8;
+	v |= v >> 16;
+	v++;
+	return v;
+}
+
 
 type SizedTextureBinding = GfxSamplerBinding & { width: number, height: number; };
 type ObjectMaterial = {
@@ -250,7 +261,7 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 	}
 	*/
 
-	createTexture(name: string, width: number, height: number, pixelFormat: GfxFormat, pixels: Uint8Array, filtered: boolean, createPreview: boolean): SizedTextureBinding {
+	createTexture(name: string, width: number, height: number, pixelFormat: GfxFormat, pixels: Uint8Array, filtered: boolean, createPreview: boolean, previewWidth = width, previewHeight = height): SizedTextureBinding {
 
 		assert(pixelFormat === GfxFormat.U8_RGBA_NORM || pixelFormat === GfxFormat.U8_RGB_NORM, "invalid texture pixel format");
 
@@ -268,7 +279,17 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 		this.textures.push(gfxTexture);
 
 		if (createPreview) {
-			this.viewerTextures.push({ name, surfaces: [convertToCanvas(new ArrayBufferSlice(pixels.buffer), width, height)] });
+			assert(pixelFormat === GfxFormat.U8_RGBA_NORM, "todo: implement rgb previews");
+			const canvas = document.createElement("canvas");
+			canvas.width = previewWidth;
+			canvas.height = previewHeight;
+			const ctx = assertExists(canvas.getContext("2d"));
+			const imageData = ctx.getImageData(0, 0, previewWidth, previewHeight);
+			for (let row = 0; row < previewHeight; ++row) {
+				imageData.data.set(new Uint8Array(pixels.buffer, row * width * 4, previewWidth * 4), row * previewWidth * 4);
+			}
+			ctx.putImageData(imageData, 0, 0);
+			this.viewerTextures.push({ name, surfaces: [canvas] });
 		}
 
 		return {
@@ -385,6 +406,7 @@ class MaterialCreator {
 		this.arenaPalette.set(arenaPalette, 4 * 16 * 3);
 		this.solidColourMaterial = null;
 
+		// todo don't overwrite?
 		arenaMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
 		arenaMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
 	}
@@ -397,7 +419,6 @@ class MaterialCreator {
 					bindingLayouts: this.bindingLayout_2_1,
 					textures: [this.renderer.createTexture(this.arenaName, 0x100, 1, GfxFormat.U8_RGB_NORM, this.arenaPalette, false, false)]
 				};
-				this.solidColourMaterial.textures[0].width = 1;
 			}
 			return this.solidColourMaterial;
 		} else if (typeof (name) !== "string") { // unknown
@@ -409,19 +430,27 @@ class MaterialCreator {
 				return this.debugMaterial;
 			}
 			if (!result.material) {
-				const textureData = new Uint8Array(4 * result.width * result.height);
+				const width = nextPow2(result.width);
+				const height = nextPow2(result.height);
+				const textureData = new Uint8Array(4 * width * height);
 				const palette = this.arenaPalette;
-				for (let i = 1; i < result.pixels.length; ++i) {
-					const p = result.pixels[i] * 3;
-					textureData[i * 4] = palette[p];
-					textureData[i * 4 + 1] = palette[p + 1];
-					textureData[i * 4 + 2] = palette[p + 2];
-					textureData[i * 4 + 3] = 0xFF;
+
+				for (let row = 0; row < result.height; ++row) {
+					const srcRowStart = row * result.width;
+					const dstRowStart = row * width * 4;
+					for (let col = 0; col < result.width; ++col) {
+						const srcPixel = result.pixels[srcRowStart + col] * 3;
+						textureData[dstRowStart + col * 4] = palette[srcPixel];
+						textureData[dstRowStart + col * 4 + 1] = palette[srcPixel + 1];
+						textureData[dstRowStart + col * 4 + 2] = palette[srcPixel + 2];
+						textureData[dstRowStart + col * 4 + 3] = srcPixel === 0 ? 0 : 255;
+					}
 				}
+
 				result.material = {
 					bindingLayouts: this.bindingLayout_2_1,
 					shader: this.renderer.shader_Textured,
-					textures: [this.renderer.createTexture(name, result.width, result.height, GfxFormat.U8_RGBA_NORM, textureData, true, true)]
+					textures: [this.renderer.createTexture(name, width, height, GfxFormat.U8_RGBA_NORM, textureData, true, true, result.width, result.height)]
 				};
 			}
 			return result.material;

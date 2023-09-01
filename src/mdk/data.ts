@@ -215,7 +215,7 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 			indices: new Uint16Array(prim.indices),
 			uvs: new Float32Array(prim.uvs),
 			positions: new Float32Array(prim.verts),
-			uvsAdjusted: false,
+			uvsAdjusted: prim === solidPrim,
 		};
 	});
 }
