@@ -158,12 +158,12 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 		//const flags = data.getUint32(offset + 32, true); // todo what are these
 
 		let prim: RawPrim | undefined;
-		let isSolid = false;
-		if (materialIndex >= 0 && materialIndex < materials.length) {
+		const isTextured = materialIndex >= 0 && materialIndex < materials.length;
+		const isSolidColour = -256 < materialIndex  && materialIndex < 0;
+		if (isTextured) {
 			prim = assertExists(rawPrims[materialIndex]);
-		} else if (materialIndex > -256 && materialIndex < 0) {
+		} else if (isSolidColour) {
 			prim = solidPrim;
-			isSolid = true;
 		} else {
 			prim = specialPrims.get(materialIndex);
 			if (!prim) {
@@ -177,12 +177,16 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 			const index = data.getUint16(offset + 2 * j, true);
 			let u: number;
 			let v: number;
-			if (isSolid) {
+			if (isSolidColour) {
 				u = -materialIndex;
 				v = 0;
 			} else {
 				u = data.getFloat32(offset + 8 + j * 8, true);
 				v = data.getFloat32(offset + 8 + j * 8 + 4, true);
+
+				if (isTextured && u === 0 && v === 0) {
+					continue; // todo figure out what's wrong with these ones
+				}
 			}
 			let seenVertList = prim.seenVerts.get(index);
 			if (!seenVertList) {

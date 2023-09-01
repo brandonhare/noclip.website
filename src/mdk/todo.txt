@@ -5,4 +5,4 @@ add skybox graphic
 look into bsp planes
 look into mesh flags property
 dont duplicate the same texture between arenas?
-fix weird bad bsp triangles
+investigate weird bad bsp triangles
