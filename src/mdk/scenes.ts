@@ -133,11 +133,11 @@ class ObjectRenderer {
 
 	prepareToRender(renderer: MdkRenderer, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput) {
 
-		//if (!this.visible || !viewerInput.camera.frustum.contains(this.aabb))
-		//	return;
+		if (!viewerInput.camera.frustum.contains(this.bbox)) // todo per-instance
+			return;
 
 		//const debugCanvas = DebugJunk.getDebugOverlayCanvas2D();
-		//DebugJunk.drawWorldSpaceAABB(debugCanvas, viewerInput.camera.clipFromWorldMatrix, this.aabb);
+		//DebugJunk.drawWorldSpaceAABB(debugCanvas, viewerInput.camera.clipFromWorldMatrix, this.bbox);
 
 		for (const part of this.parts) {
 			for (const prim of part.primitives) {
@@ -145,8 +145,7 @@ class ObjectRenderer {
 				const inst = renderInstManager.newRenderInst();
 
 				let off = inst.allocateUniformBuffer(1, 12);
-
-				off += fillMatrix4x3(inst.mapUniformBufferF32(1), off, mat4.fromXRotation(mat4.create(), Math.PI * -0.5));
+				off += fillMatrix4x3(inst.mapUniformBufferF32(1), off, renderer.identityMatrix); // todo instance transform
 
 				const material = prim.material;
 
@@ -205,13 +204,17 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 	shader_SolidColour: GfxProgram;
 	shader_Textured: GfxProgram;
 
+	identityMatrix : mat4 = mat4.create();
+	levelStartLocation : mat4;
 	objects: ObjectRenderer[] = [];
 
-	constructor(device: GfxDevice, context: SceneContext) {
+	constructor(device: GfxDevice, context: SceneContext, levelStartLocation : mat4) {
 		this.device = device;
 
 		this.animationController = new AnimationController();
 		this.renderHelper = new GfxRenderHelper(device, context);
+
+		this.levelStartLocation = levelStartLocation;
 
 		this.sampler_Nearest = device.createSampler({
 			wrapS: GfxWrapMode.Repeat,
@@ -255,6 +258,11 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 		});
 	}
 
+
+
+    getDefaultWorldMatrix(dst: mat4) {
+		mat4.copy(dst, this.levelStartLocation);
+	}
 	/*
 	createPanels(): UI.Panel[] {
 		return [new ObjectPanel(this)]
@@ -475,7 +483,7 @@ class MdkSceneDesc implements SceneDesc {
 		const mto = await mtoPromise;
 		const sni = await sniPromise;
 
-		const renderer = new MdkRenderer(device, context);
+		const renderer = new MdkRenderer(device, context, dti.levelStartLocation);
 		const materialCreator = new MaterialCreator(renderer, mti, mto.materials, dti.levelPalette);
 
 		const unused = [

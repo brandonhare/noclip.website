@@ -1,4 +1,5 @@
-figure out all the weird materials
+figure out special materials
+apply mti numeric materials to mesh splitting
 check entities
 figure out skybox maths
 add skybox graphic
@@ -6,3 +7,5 @@ look into bsp planes
 look into mesh flags property
 dont duplicate the same texture between arenas?
 investigate weird bad bsp triangles
+replace solid colour mesh shader with vertex colours
+mesh instances

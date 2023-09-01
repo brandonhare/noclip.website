@@ -1,20 +1,31 @@
-import { vec3 } from "gl-matrix";
+import { mat4, vec3 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { AABB } from "../Geometry.js";
 import { align, assert, assertExists, readString } from "../util.js";
 
 type DtiData = {
 	levelPalette: Uint8Array,
+	levelStartLocation: mat4,
 };
 export function parseDti(file: ArrayBufferSlice): DtiData {
 	const data = file.createDataView();
+
+	const data1Offset = data.getUint32(20 + 4 * 0, true) + 8;
+	const startX = data.getFloat32(data1Offset, true);
+	const startY = data.getFloat32(data1Offset + 8, true);
+	const startZ = -data.getFloat32(data1Offset + 4, true);
+	const startAngle = (data.getFloat32(data1Offset + 12, true) - 90) * Math.PI / 180;
+	const levelStartLocation = mat4.fromYRotation(mat4.create(), startAngle);
+	levelStartLocation[12] = startX;
+	levelStartLocation[13] = startY + 5;
+	levelStartLocation[14] = startZ;
 
 	const palOffset = data.getUint32(20 + 4 * 3, true) + 8;
 	const levelPalette = file.createTypedArray(Uint8Array, palOffset, 0x300);
 
 	// todo: everything else
 
-	return { levelPalette };
+	return { levelPalette, levelStartLocation };
 }
 
 type MtoData = {
@@ -97,11 +108,11 @@ export type RawMeshPrimitive = {
 function readAABB(data: DataView, offset: number): AABB {
 	return new AABB(
 		data.getFloat32(offset, true), // min x
-		data.getFloat32(offset + 8, true), // min y
 		data.getFloat32(offset + 16, true), // min z
+		-data.getFloat32(offset + 8, true), // min y
 		data.getFloat32(offset + 4, true), // max x
-		data.getFloat32(offset + 12, true), // max y
 		data.getFloat32(offset + 20, true), // max z
+		-data.getFloat32(offset + 12, true), // max y
 	);
 }
 
@@ -117,8 +128,16 @@ function calculateAABB(points: ArrayLike<number>, numPoints: number): AABB {
 	return new AABB(range[0], range[1], range[2], range[3], range[4], range[5]);
 }
 
-function readVerts(file: ArrayBufferSlice, offset: number, numVerts: number): Float32Array {
-	return file.createTypedArray(Float32Array, offset, numVerts * 3);
+
+function readVerts(data: DataView, offset: number, numVerts: number): Float32Array {
+	const result = new Float32Array(numVerts * 3);
+	for (let i = 0; i < numVerts * 3; i += 3) {
+		result[i] = data.getFloat32(offset, true);
+		result[i + 1] = data.getFloat32(offset + 8, true);
+		result[i + 2] = -data.getFloat32(offset + 4, true);
+		offset += 12;
+	}
+	return result;
 }
 
 function parseMeshData(name: string, materials: string[], data: DataView, startOffset: number, numTris: number, verts: Float32Array): RawMeshPrimitive[] {
@@ -159,7 +178,7 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 
 		let prim: RawPrim | undefined;
 		const isTextured = materialIndex >= 0 && materialIndex < materials.length;
-		const isSolidColour = -256 < materialIndex  && materialIndex < 0;
+		const isSolidColour = -256 < materialIndex && materialIndex < 0;
 		if (isTextured) {
 			prim = assertExists(rawPrims[materialIndex]);
 		} else if (isSolidColour) {
@@ -248,13 +267,13 @@ function parseMesh(name: string, file: ArrayBufferSlice, isMeshGroup: boolean): 
 		if (isMeshGroup) {
 			name = readString(file, offset, 12);
 			origin[0] = data.getFloat32(offset + 12, true);
-			origin[1] = data.getFloat32(offset + 16, true);
-			origin[2] = data.getFloat32(offset + 20, true);
+			origin[1] = data.getFloat32(offset + 20, true);
+			origin[2] = -data.getFloat32(offset + 16, true);
 			offset += 24;
 		}
 
 		const numVerts = data.getUint32(offset, true);
-		const verts = readVerts(file, offset + 4, numVerts);
+		const verts = readVerts(data, offset + 4, numVerts);
 		offset += 4 + numVerts * 12;
 
 		// adjust to origin
@@ -310,7 +329,7 @@ function parseBsp(name: string, file: ArrayBufferSlice): BspData {
 
 	const numVerts = data.getUint32(offset, true);
 	offset += 4;
-	const verts = readVerts(file, offset, numVerts);
+	const verts = readVerts(data, offset, numVerts);
 	offset += numVerts * 12;
 
 	const primitives = parseMeshData(name, materials, data, triOffset, numTris, verts);
