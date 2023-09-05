@@ -3,29 +3,74 @@ import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { AABB } from "../Geometry.js";
 import { align, assert, assertExists, readString } from "../util.js";
 
-type DtiData = {
+export type DtiData = {
 	levelPalette: Uint8Array,
 	levelStartLocation: mat4,
+	arenas: DtiArenaData[],
+};
+export type DtiArenaData = { 
+	name : string, 
+	num : number, // todo what is this
+	entities : DtiEntityData[]
+};
+export type DtiEntityData = {
+	entityType : number,
+	a : number,
+	b : number,
+	pos : vec3,
+	data : vec3 | string,
 };
 export function parseDti(file: ArrayBufferSlice): DtiData {
 	const data = file.createDataView();
 
 	const data1Offset = data.getUint32(20 + 4 * 0, true) + 8;
-	const startX = data.getFloat32(data1Offset, true);
-	const startY = data.getFloat32(data1Offset + 8, true);
-	const startZ = -data.getFloat32(data1Offset + 4, true);
+	const startPos = readVec3(data, data1Offset);
 	const startAngle = (data.getFloat32(data1Offset + 12, true) - 90) * Math.PI / 180;
 	const levelStartLocation = mat4.fromYRotation(mat4.create(), startAngle);
-	levelStartLocation[12] = startX;
-	levelStartLocation[13] = startY + 5;
-	levelStartLocation[14] = startZ;
+	levelStartLocation[12] = startPos[0];
+	levelStartLocation[13] = startPos[1] + 5;
+	levelStartLocation[14] = startPos[2];
+
+	
+	let arenaDataOffset = data.getUint32(20 + 4 * 2, true) + 4;
+	const numArenas = data.getUint32(arenaDataOffset, true);
+	arenaDataOffset += 4;
+	const arenas = new Array<DtiArenaData>(numArenas);
+	for (let i = 0; i < numArenas; ++i){
+		const arenaName = readString(file, arenaDataOffset + i * 16, 8);
+		let entityOffset = data.getUint32(arenaDataOffset + i * 16 + 8, true) + 4;
+		const arenaNum = data.getFloat32(arenaDataOffset + i * 16 + 12, true);
+		const numEntities = data.getUint32(entityOffset, true);
+		entityOffset += 4;
+		const entities = new Array<DtiEntityData>(numEntities);
+		for (let j = 0; j < numEntities; ++j){
+			const entityType = data.getInt32(entityOffset, true);
+			const a = data.getInt32(entityOffset + 4, true);
+			const b = data.getInt32(entityOffset + 8, true);
+			const pos = readVec3(data, entityOffset + 12);
+			const entityData = 
+				(entityType === 2 || entityType === 4)
+				? readString(file, entityOffset + 24, 12)
+				: readVec3(data, entityOffset + 24);
+			entityOffset += 36;
+			entities[j] = {entityType, a, b, pos, data: entityData};
+		}
+		arenas[i] = {name : arenaName, num : arenaNum, entities}
+	}
 
 	const palOffset = data.getUint32(20 + 4 * 3, true) + 8;
 	const levelPalette = file.createTypedArray(Uint8Array, palOffset, 0x300);
 
 	// todo: everything else
 
-	return { levelPalette, levelStartLocation };
+	return { levelPalette, arenas, levelStartLocation };
+}
+
+function readVec3(data : DataView, offset : number) : vec3{
+	return [data.getFloat32(offset, true),
+		 data.getFloat32(offset + 8, true),
+		 -data.getFloat32(offset + 4, true)
+		];
 }
 
 type MtoData = {

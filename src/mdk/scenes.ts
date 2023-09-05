@@ -12,7 +12,7 @@ import { GfxRenderInstManager, executeOnPass } from "../gfx/render/GfxRenderInst
 import * as UI from "../ui.js";
 import { assert, assertExists } from "../util.js";
 import * as Viewer from "../viewer.js";
-import { MtiData, MtiTexture, RawMesh, parseDti, parseMti, parseMto, parseSni } from "./data.js";
+import { DtiEntityData, MtiData, MtiTexture, RawMesh, parseDti, parseMti, parseMto, parseSni } from "./data.js";
 import * as Shaders from "./shaders.js";
 
 // todo does this exist in a util somewhere?
@@ -187,6 +187,40 @@ class ObjectPanel extends UI.Panel {
 }
 */
 
+class Entity {
+	msg : string;
+	constructor(public data : DtiEntityData){
+		this.msg = `${this.data.entityType},${this.data.a},${this.data.b}`;
+		if (typeof(data.data) === "string")
+			this.msg += " - " + data.data;
+	}
+	prepareToRender(renderer: MdkRenderer, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput){
+		const ctx = DebugJunk.getDebugOverlayCanvas2D();
+		const mat = viewerInput.camera.clipFromWorldMatrix;
+
+
+		if (this.data.entityType === 6 || this.data.entityType === 7){
+			const p1 = this.data.pos;
+			const p2 = this.data.data;
+			assert(typeof(p2) !== "string");
+			DebugJunk.drawWorldSpaceAABB(ctx, mat, new AABB(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]));
+			DebugJunk.drawWorldSpaceText(ctx, mat, [(p1[0] + p2[0])/2,(p1[1] + p2[1])/2,(p1[2] + p2[2])/2], this.msg, 0);
+			return;
+		}
+
+		DebugJunk.drawWorldSpaceText(ctx, mat, this.data.pos, this.msg, 10);
+		
+		if (typeof(this.data.data) !== "string") {
+			const pos = this.data.data;
+			if (pos[0] || pos[1] || pos[2]){
+				DebugJunk.drawWorldSpaceLine(ctx, mat, this.data.pos, pos);
+				return;
+			}
+		}
+		DebugJunk.drawWorldSpacePoint(ctx, mat, this.data.pos);
+	}
+}
+
 class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 	viewerTextures: Viewer.Texture[] = [];
 	textureHolder = this;
@@ -207,6 +241,7 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 	identityMatrix : mat4 = mat4.create();
 	levelStartLocation : mat4;
 	objects: ObjectRenderer[] = [];
+	entities : Entity[] = [];
 
 	constructor(device: GfxDevice, context: SceneContext, levelStartLocation : mat4) {
 		this.device = device;
@@ -328,6 +363,9 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 
 		for (const object of this.objects)
 			object.prepareToRender(this, renderInstManager, viewerInput);
+
+		for (const entity of this.entities)
+			entity.prepareToRender(this, renderInstManager, viewerInput);
 
 		renderInstManager.popTemplateRenderInst();
 
@@ -485,6 +523,12 @@ class MdkSceneDesc implements SceneDesc {
 
 		const renderer = new MdkRenderer(device, context, dti.levelStartLocation);
 		const materialCreator = new MaterialCreator(renderer, mti, mto.materials, dti.levelPalette);
+
+		for (const arena of dti.arenas){
+			for (const entity of arena.entities){
+				renderer.entities.push(new Entity(entity));
+			}
+		}
 
 		const unused = [
 			"DANT_8",
