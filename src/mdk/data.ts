@@ -1,4 +1,4 @@
-import { mat4, vec3 } from "gl-matrix";
+import { mat4, vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
 import { AABB } from "../Geometry.js";
 import { align, assert, assertExists, readString } from "../util.js";
@@ -6,19 +6,20 @@ import { align, assert, assertExists, readString } from "../util.js";
 export type DtiData = {
 	levelPalette: Uint8Array,
 	levelStartLocation: mat4,
+	translucentColours: vec4[],
 	arenas: DtiArenaData[],
 };
-export type DtiArenaData = { 
-	name : string, 
-	num : number, // todo what is this
-	entities : DtiEntityData[]
+export type DtiArenaData = {
+	name: string,
+	num: number, // todo what is this
+	entities: DtiEntityData[];
 };
 export type DtiEntityData = {
-	entityType : number,
-	a : number,
-	b : number,
-	pos : vec3,
-	data : vec3 | string,
+	entityType: number,
+	a: number,
+	b: number,
+	pos: vec3,
+	data: vec3 | string,
 };
 export function parseDti(file: ArrayBufferSlice): DtiData {
 	const data = file.createDataView();
@@ -30,32 +31,41 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 	levelStartLocation[12] = startPos[0];
 	levelStartLocation[13] = startPos[1] + 5;
 	levelStartLocation[14] = startPos[2];
+	const translucentColours = new Array<vec4>(4);
+	const translucentColoursOffset = data1Offset + 48;
+	for (let i = 0; i < 4; ++i) {
+		translucentColours[i] = [
+			data.getUint8(translucentColoursOffset + i * 16) / 255,
+			data.getUint8(translucentColoursOffset + i * 16 + 4) / 255,
+			data.getUint8(translucentColoursOffset + i * 16 + 8) / 255,
+			data.getUint8(translucentColoursOffset + i * 16 + 12) / 255,
+		];
+	}
 
-	
 	let arenaDataOffset = data.getUint32(20 + 4 * 2, true) + 4;
 	const numArenas = data.getUint32(arenaDataOffset, true);
 	arenaDataOffset += 4;
 	const arenas = new Array<DtiArenaData>(numArenas);
-	for (let i = 0; i < numArenas; ++i){
+	for (let i = 0; i < numArenas; ++i) {
 		const arenaName = readString(file, arenaDataOffset + i * 16, 8);
 		let entityOffset = data.getUint32(arenaDataOffset + i * 16 + 8, true) + 4;
 		const arenaNum = data.getFloat32(arenaDataOffset + i * 16 + 12, true);
 		const numEntities = data.getUint32(entityOffset, true);
 		entityOffset += 4;
 		const entities = new Array<DtiEntityData>(numEntities);
-		for (let j = 0; j < numEntities; ++j){
+		for (let j = 0; j < numEntities; ++j) {
 			const entityType = data.getInt32(entityOffset, true);
 			const a = data.getInt32(entityOffset + 4, true);
 			const b = data.getInt32(entityOffset + 8, true);
 			const pos = readVec3(data, entityOffset + 12);
-			const entityData = 
+			const entityData =
 				(entityType === 2 || entityType === 4)
-				? readString(file, entityOffset + 24, 12)
-				: readVec3(data, entityOffset + 24);
+					? readString(file, entityOffset + 24, 12)
+					: readVec3(data, entityOffset + 24);
 			entityOffset += 36;
-			entities[j] = {entityType, a, b, pos, data: entityData};
+			entities[j] = { entityType, a, b, pos, data: entityData };
 		}
-		arenas[i] = {name : arenaName, num : arenaNum, entities}
+		arenas[i] = { name: arenaName, num: arenaNum, entities };
 	}
 
 	const palOffset = data.getUint32(20 + 4 * 3, true) + 8;
@@ -63,14 +73,14 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 
 	// todo: everything else
 
-	return { levelPalette, arenas, levelStartLocation };
+	return { levelPalette, levelStartLocation, translucentColours, arenas };
 }
 
-function readVec3(data : DataView, offset : number) : vec3{
+function readVec3(data: DataView, offset: number): vec3 {
 	return [data.getFloat32(offset, true),
-		 data.getFloat32(offset + 8, true),
-		 -data.getFloat32(offset + 4, true)
-		];
+	data.getFloat32(offset + 8, true),
+	-data.getFloat32(offset + 4, true)
+	];
 }
 
 type MtoData = {
@@ -147,7 +157,9 @@ export type RawMeshPrimitive = {
 	indices: Uint16Array,
 	positions: Float32Array,
 	uvs: Float32Array,
-	uvsAdjusted: boolean,
+	bbox: AABB,
+
+	uvsAdjusted: boolean, // runtime flag
 };
 
 function readAABB(data: DataView, offset: number): AABB {
@@ -161,7 +173,7 @@ function readAABB(data: DataView, offset: number): AABB {
 	);
 }
 
-function calculateAABB(points: ArrayLike<number>, numPoints: number): AABB {
+function calculateAABB(points: ArrayLike<number>, numPoints: number = points.length * 3): AABB {
 	const range = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
 	for (let i = 0; i < numPoints * 3; i += 3) {
 		for (let j = 0; j < 3; ++j) {
@@ -224,10 +236,15 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 		let prim: RawPrim | undefined;
 		const isTextured = materialIndex >= 0 && materialIndex < materials.length;
 		const isSolidColour = -256 < materialIndex && materialIndex < 0;
+		const isTranslucent = -1027.0 <= materialIndex && materialIndex <= -1024.0;
 		if (isTextured) {
 			prim = assertExists(rawPrims[materialIndex]);
 		} else if (isSolidColour) {
 			prim = solidPrim;
+		} else if (isTranslucent) {
+			// todo do something more efficient than rendering every triangle individually
+			prim = newRawPrim(materialIndex);
+			rawPrims.push(prim);
 		} else {
 			prim = specialPrims.get(materialIndex);
 			if (!prim) {
@@ -243,6 +260,10 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 			let v: number;
 			if (isSolidColour) {
 				u = -materialIndex;
+				v = 0;
+			} else if (isTranslucent) {
+				// map translucent colour index to [0..4)
+				u = -materialIndex - 1024;
 				v = 0;
 			} else {
 				u = data.getFloat32(offset + 8 + j * 8, true);
@@ -280,6 +301,7 @@ function parseMeshData(name: string, materials: string[], data: DataView, startO
 	return rawPrims.filter(prim => prim.indices.length).map(prim => {
 		return {
 			material: prim.material,
+			bbox: calculateAABB(prim.verts),
 			indices: new Uint16Array(prim.indices),
 			uvs: new Float32Array(prim.uvs),
 			positions: new Float32Array(prim.verts),
@@ -379,7 +401,7 @@ function parseBsp(name: string, file: ArrayBufferSlice): BspData {
 
 	const primitives = parseMeshData(name, materials, data, triOffset, numTris, verts);
 
-	const bbox = calculateAABB(verts, numVerts);
+	const bbox = calculateAABB(verts);
 
 	return { name, materials, parts: [{ name, bbox, primitives, origin: [0, 0, 0] }], bbox };
 }

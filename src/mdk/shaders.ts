@@ -7,10 +7,12 @@ function makeShader(device: GfxDevice, vert: string, frag: string): GfxProgram {
 	);
 }
 
+// todo change to vertex colours
 export function createSolidColourShader(device: GfxDevice): GfxProgram {
 	const vert = `
 layout(std140) uniform ub_SceneParams {
 	Mat4x4 ub_WorldToClip;
+	vec4 ub_TranslucentColours[4];
 };
 layout(std140) uniform ub_InstanceParams {
 	Mat4x3 ub_ModelToWorld;
@@ -30,9 +32,35 @@ void main(){
 }`;
 	const frag = `
 in vec4 v_Colour;
-void main(){
-	gl_FragColor = v_Colour;
+void main(){ gl_FragColor = v_Colour; }
+`;
+	return makeShader(device, vert, frag);
 }
+
+// todo merge with colour shader
+export function createTranslucentShader(device: GfxDevice): GfxProgram {
+	const vert = `
+layout(std140) uniform ub_SceneParams {
+	Mat4x4 ub_WorldToClip;
+	vec4 ub_TranslucentColours[4];
+};
+layout(std140) uniform ub_InstanceParams {
+	Mat4x3 ub_ModelToWorld;
+};
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec2 a_UV;
+
+out vec4 v_Colour;
+
+void main(){
+	v_Colour = ub_TranslucentColours[int(a_UV.x)];
+	vec4 worldPosition = Mul(_Mat4x4(ub_ModelToWorld), vec4(a_Position, 1.0));
+	gl_Position = Mul(ub_WorldToClip, worldPosition);
+}`;
+	const frag = `
+in vec4 v_Colour;
+void main(){ gl_FragColor = v_Colour; }
 `;
 	return makeShader(device, vert, frag);
 }
@@ -41,6 +69,7 @@ export function createTexturedShader(device: GfxDevice): GfxProgram {
 	const vert = `
 layout(std140) uniform ub_SceneParams {
 	Mat4x4 ub_WorldToClip;
+	vec4 ub_TranslucentColours[4];
 };
 layout(std140) uniform ub_InstanceParams {
 	Mat4x3 ub_ModelToWorld;
@@ -70,6 +99,7 @@ export function createDebugShader(device: GfxDevice): GfxProgram {
 	const vert = `
 layout(std140) uniform ub_SceneParams {
 	Mat4x4 ub_WorldToClip;
+	vec4 ub_TranslucentColours[4];
 };
 layout(std140) uniform ub_InstanceParams {
 	Mat4x3 ub_ModelToWorld;
