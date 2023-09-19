@@ -5,8 +5,14 @@ import { align, assert, assertExists, readString } from "../util.js";
 
 export type DtiData = {
 	levelPalette: Uint8Array,
-	levelStartLocation: mat4,
 	translucentColours: vec4[],
+
+	levelStartLocation: mat4,
+
+	skybox: MtiTexture,
+	skyTopColourIndex: number,
+	skyBottomColourIndex: number,
+
 	arenas: DtiArenaData[],
 };
 export type DtiArenaData = {
@@ -24,15 +30,51 @@ export type DtiEntityData = {
 export function parseDti(file: ArrayBufferSlice): DtiData {
 	const data = file.createDataView();
 
-	const data1Offset = data.getUint32(20 + 4 * 0, true) + 8;
-	const startPos = readVec3(data, data1Offset);
-	const startAngle = (data.getFloat32(data1Offset + 12, true) - 90) * Math.PI / 180;
+	const dataOffset = data.getUint32(20, true) + 8;
+
+	// start location
+	const startPos = readVec3(data, dataOffset);
+	const startAngle = (data.getFloat32(dataOffset + 12, true) - 90) * Math.PI / 180;
 	const levelStartLocation = mat4.fromYRotation(mat4.create(), startAngle);
 	levelStartLocation[12] = startPos[0];
 	levelStartLocation[13] = startPos[1] + 5;
 	levelStartLocation[14] = startPos[2];
+
+	// skybox
+	const skyTopColourIndex = data.getInt32(dataOffset + 16, true);
+	const skyBottomColourIndex = data.getInt32(dataOffset + 20, true);
+	const skyDestWidth = data.getInt32(dataOffset + 32, true) + 4;
+	const skySrcHeight = data.getInt32(dataOffset + 36, true);
+	const skyReflectionTopColourIndex = data.getInt32(dataOffset + 40, true);
+	const skyReflectionBottomColourIndex = data.getInt32(dataOffset + 44, true);
+	const skyHasReflections = skyReflectionTopColourIndex > 0;
+	const skyboxPixelsOffset = data.getUint32(20 + 16, true) + 4;
+	let skyPixels: Uint8Array;
+	let skySrcWidth = skyDestWidth;
+	let skyDestHeight = skySrcHeight;
+	if (skyHasReflections) {
+		skySrcWidth = skyDestWidth * 2;
+		skyDestHeight = skySrcHeight / 2;
+		const srcPixels = file.createTypedArray(Uint8Array, skyboxPixelsOffset, skySrcWidth * skySrcHeight);
+		skyPixels = new Uint8Array(skyDestWidth * skyDestHeight);
+		for (let row = 0; row < skyDestHeight; ++row) {
+			for (let col = 0; col < skyDestWidth; ++col) {
+				skyPixels[row * skyDestWidth + col] = srcPixels[row * skySrcWidth + col];
+			}
+		}
+		// todo reflection textures
+	} else {
+		skyPixels = file.createTypedArray(Uint8Array, skyboxPixelsOffset, skySrcWidth * skyDestHeight);
+	}
+	const skybox: MtiTexture = {
+		width: skyDestWidth,
+		height: skyDestHeight,
+		pixels: skyPixels
+	};
+
+	// translucent colours
+	const translucentColoursOffset = dataOffset + 48;
 	const translucentColours = new Array<vec4>(4);
-	const translucentColoursOffset = data1Offset + 48;
 	for (let i = 0; i < 4; ++i) {
 		translucentColours[i] = [
 			data.getUint8(translucentColoursOffset + i * 16) / 255,
@@ -42,6 +84,7 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 		];
 	}
 
+	// arenas
 	let arenaDataOffset = data.getUint32(20 + 4 * 2, true) + 4;
 	const numArenas = data.getUint32(arenaDataOffset, true);
 	arenaDataOffset += 4;
@@ -68,12 +111,11 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 		arenas[i] = { name: arenaName, num: arenaNum, entities };
 	}
 
+	// palette
 	const palOffset = data.getUint32(20 + 4 * 3, true) + 8;
 	const levelPalette = file.createTypedArray(Uint8Array, palOffset, 0x300);
 
-	// todo: everything else
-
-	return { levelPalette, levelStartLocation, translucentColours, arenas };
+	return { levelPalette, levelStartLocation, skybox, skyTopColourIndex, skyBottomColourIndex, translucentColours, arenas };
 }
 
 function readVec3(data: DataView, offset: number): vec3 {
@@ -173,9 +215,9 @@ function readAABB(data: DataView, offset: number): AABB {
 	);
 }
 
-function calculateAABB(points: ArrayLike<number>, numPoints: number = points.length * 3): AABB {
+function calculateAABB(points: ArrayLike<number>, numPoints: number = points.length): AABB {
 	const range = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-	for (let i = 0; i < numPoints * 3; i += 3) {
+	for (let i = 0; i < numPoints; i += 3) {
 		for (let j = 0; j < 3; ++j) {
 			const n = points[i + j];
 			range[j] = Math.min(range[j], n);

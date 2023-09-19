@@ -7,10 +7,10 @@ import { SceneContext, SceneDesc, SceneGroup } from "../SceneBase.js";
 import { setAttachmentStateSimple } from "../gfx/helpers/GfxMegaStateDescriptorHelpers.js";
 import { makeBackbufferDescSimple, opaqueBlackFullClearRenderPassDescriptor, pushAntialiasingPostProcessPass } from "../gfx/helpers/RenderGraphHelpers.js";
 import { fillMatrix4x3, fillMatrix4x4, fillVec4v } from "../gfx/helpers/UniformBufferHelpers.js";
-import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
+import { GfxBindingLayoutDescriptor, GfxBlendFactor, GfxBlendMode, GfxBuffer, GfxBufferFrequencyHint, GfxBufferUsage, GfxCompareMode, GfxCullMode, GfxDevice, GfxFormat, GfxIndexBufferDescriptor, GfxInputLayout, GfxMipFilterMode, GfxProgram, GfxSampler, GfxSamplerBinding, GfxTexFilterMode, GfxTexture, GfxTextureDimension, GfxTextureUsage, GfxVertexBufferDescriptor, GfxVertexBufferFrequency, GfxWrapMode } from "../gfx/platform/GfxPlatform.js";
 import { GfxrAttachmentSlot } from "../gfx/render/GfxRenderGraph.js";
 import { GfxRenderHelper } from "../gfx/render/GfxRenderHelper.js";
-import { GfxRenderInstManager, executeOnPass, makeDepthKey, makeSortKeyOpaque, makeSortKeyTranslucent, setSortKeyTranslucentDepth } from "../gfx/render/GfxRenderInstManager.js";
+import { GfxRenderInstManager, GfxRendererLayer, executeOnPass, makeDepthKey, makeSortKey, makeSortKeyOpaque, makeSortKeyTranslucent, setSortKeyTranslucentDepth } from "../gfx/render/GfxRenderInstManager.js";
 import * as UI from "../ui.js";
 import { assert, assertExists } from "../util.js";
 import * as Viewer from "../viewer.js";
@@ -174,13 +174,13 @@ class ObjectRenderer {
 						blendSrcFactor: GfxBlendFactor.SrcAlpha,
 					});
 					inst.sortKey =
-						setSortKeyTranslucentDepth(makeSortKeyTranslucent(1), makeDepthKey(
+						setSortKeyTranslucentDepth(makeSortKeyTranslucent(GfxRendererLayer.TRANSLUCENT), makeDepthKey(
 							computeViewSpaceDepthFromWorldSpacePoint(viewerInput.camera.viewMatrix,
 								prim.center,
 							), false
 						));
 				} else {
-					inst.sortKey = makeSortKeyOpaque(0, material.id);
+					inst.sortKey = makeSortKeyOpaque(GfxRendererLayer.OPAQUE, material.id);
 				}
 
 				assert(material.textures.length === material.bindingLayouts[0].numSamplers);
@@ -197,6 +197,62 @@ class ObjectRenderer {
 	destroy(device: GfxDevice) {
 		device.destroyBuffer(this.indexBuffer);
 		device.destroyBuffer(this.vertexBuffer);
+	}
+}
+
+
+class SkyboxRenderer extends ObjectRenderer {
+	constructor(renderer: MdkRenderer, device: GfxDevice, materialCache: MaterialCreator) {
+		const bbox = new AABB(-Infinity, -Infinity, -Infinity, Infinity, Infinity, Infinity);
+		const skyboxTexture = assertExists(materialCache.materials.get("skybox"));
+		const mesh: RawMesh = {
+			name: "Skybox",
+			materials: ["skybox"],
+			bbox,
+			parts: [{
+				name: "Skybox",
+				bbox,
+				origin: [0, 0, 0],
+				primitives: [{
+					material: "skybox",
+					positions: new Float32Array([-1, -1, 0, -1, 3, 0, 3, -1, 0]),
+					uvs: new Float32Array([0, skyboxTexture.height, 0, -skyboxTexture.height, skyboxTexture.width * 2, skyboxTexture.height]),
+					indices: new Uint16Array([0, 1, 2]),
+					bbox,
+					uvsAdjusted: false,
+				}]
+			}]
+		};
+		super(renderer, device, mesh, materialCache);
+	}
+	override prepareToRender(renderer: MdkRenderer, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput) {
+		const prim = this.parts[0].primitives[0];
+
+		const inst = renderInstManager.newRenderInst();
+
+		// todo rotate and scale properly
+		// todo top and bottom colours
+		let scene_off = inst.allocateUniformBuffer(0, 32);
+		scene_off += fillMatrix4x4(inst.mapUniformBufferF32(0), scene_off, renderer.identityMatrix);
+
+		let off = inst.allocateUniformBuffer(1, 12);
+		off += fillMatrix4x3(inst.mapUniformBufferF32(1), off, renderer.identityMatrix);
+
+		const material = prim.material;
+		inst.setGfxProgram(material.shader);
+		inst.setSamplerBindingsFromTextureMappings(material.textures);
+		inst.setBindingLayouts(material.bindingLayouts);
+		const flags = inst.getMegaStateFlags();
+		flags.depthWrite = false;
+		flags.depthCompare = GfxCompareMode.Always;
+		inst.sortKey = makeSortKey(GfxRendererLayer.BACKGROUND);
+
+		assert(material.textures.length === material.bindingLayouts[0].numSamplers);
+
+		inst.setVertexInput(prim.inputLayout, prim.vertexBuffers, prim.indexBuffer);
+		inst.drawIndexes(prim.numIndices);
+
+		renderInstManager.submitRenderInst(inst);
 	}
 }
 
@@ -229,24 +285,16 @@ class Entity {
 		const mat = viewerInput.camera.clipFromWorldMatrix;
 
 
-		if (this.data.entityType === 6 || this.data.entityType === 7) {
+		const entType = this.data.entityType;
+		if (typeof (this.data.data) !== "string" && entType !== 5 && entType !== 8) {
 			const p1 = this.data.pos;
 			const p2 = this.data.data;
-			assert(typeof (p2) !== "string");
 			DebugJunk.drawWorldSpaceAABB(ctx, mat, new AABB(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]));
 			DebugJunk.drawWorldSpaceText(ctx, mat, [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, (p1[2] + p2[2]) / 2], this.msg, 0);
 			return;
 		}
 
 		DebugJunk.drawWorldSpaceText(ctx, mat, this.data.pos, this.msg, 10);
-
-		if (typeof (this.data.data) !== "string") {
-			const pos = this.data.data;
-			if (pos[0] || pos[1] || pos[2]) {
-				DebugJunk.drawWorldSpaceLine(ctx, mat, this.data.pos, pos);
-				return;
-			}
-		}
 		DebugJunk.drawWorldSpacePoint(ctx, mat, this.data.pos);
 	}
 }
@@ -275,7 +323,7 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 	objects: ObjectRenderer[] = [];
 	entities: Entity[] = [];
 
-	constructor(device: GfxDevice, context: SceneContext, levelStartLocation: mat4, translucentColours : vec4[]) {
+	constructor(device: GfxDevice, context: SceneContext, levelStartLocation: mat4, translucentColours: vec4[]) {
 		this.device = device;
 
 		this.animationController = new AnimationController();
@@ -401,8 +449,8 @@ class MdkRenderer implements Viewer.SceneGfx, UI.TextureListHolder {
 		for (const object of this.objects)
 			object.prepareToRender(this, renderInstManager, viewerInput);
 
-		//for (const entity of this.entities)
-		//	entity.prepareToRender(this, renderInstManager, viewerInput);
+		for (const entity of this.entities)
+			entity.prepareToRender(this, renderInstManager, viewerInput);
 
 		renderInstManager.popTemplateRenderInst();
 
@@ -466,7 +514,7 @@ class MaterialCreator {
 		numSamplers: 1,
 	}];
 
-	constructor(renderer: MdkRenderer, sharedMaterials: MtiData, levelMaterials: MtiData, levelPalette: Uint8Array) {
+	constructor(renderer: MdkRenderer, sharedMaterials: MtiData, levelMaterials: MtiData, levelPalette: Uint8Array, skyboxTexture: MtiTexture) {
 		this.renderer = renderer;
 		this.renderer = renderer;
 		this.levelPalette = levelPalette;
@@ -474,10 +522,13 @@ class MaterialCreator {
 		sharedMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
 		sharedMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
 
+		this.materials.set("skybox", { ...skyboxTexture, material: null });
+
 		levelMaterials.textures.forEach((tex, name) => this.materials.set(name, { ...tex, material: null }));
 		levelMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
 
 		this.arenaPalette = new Uint8Array(0x300);
+		this.arenaPalette.set(levelPalette);
 
 		this.debugMaterial = {
 			id: this.material_ids++,
@@ -507,6 +558,29 @@ class MaterialCreator {
 		arenaMaterials.others.forEach((num, name) => this.strangeMaterialDefs.set(name, num));
 	}
 
+	colourTexture(destWidth: number, destHeight: number, source: MtiTexture, palette = this.arenaPalette): Uint8Array {
+		const srcHeight = source.height;
+		const srcWidth = source.width;
+		assert(destWidth >= srcWidth);
+		assert(destHeight >= srcHeight);
+		const srcPixels = source.pixels;
+		const destPixels = new Uint8Array(4 * destWidth * destHeight);
+		for (let row = 0; row < srcHeight; ++row) {
+			const srcRowStart = row * srcWidth;
+			const dstRowStart = row * destWidth * 4;
+			for (let col = 0; col < srcWidth; ++col) {
+				const srcPixel = srcPixels[srcRowStart + col];
+				const paletteOffset = srcPixel * 3;
+				destPixels[dstRowStart + col * 4] = palette[paletteOffset];
+				destPixels[dstRowStart + col * 4 + 1] = palette[paletteOffset + 1];
+				destPixels[dstRowStart + col * 4 + 2] = palette[paletteOffset + 2];
+				destPixels[dstRowStart + col * 4 + 3] = paletteOffset === 0 ? 0 : 255;
+			}
+		}
+
+		return destPixels;
+	}
+
 	getMaterial(name: string | number): ObjectMaterial {
 		if (name === 0x10000) { // solid colour todo better identifier
 			if (!this.solidColourMaterial) {
@@ -528,20 +602,7 @@ class MaterialCreator {
 			if (!result.material) {
 				const width = nextPow2(result.width);
 				const height = nextPow2(result.height);
-				const textureData = new Uint8Array(4 * width * height);
-				const palette = this.arenaPalette;
-
-				for (let row = 0; row < result.height; ++row) {
-					const srcRowStart = row * result.width;
-					const dstRowStart = row * width * 4;
-					for (let col = 0; col < result.width; ++col) {
-						const srcPixel = result.pixels[srcRowStart + col] * 3;
-						textureData[dstRowStart + col * 4] = palette[srcPixel];
-						textureData[dstRowStart + col * 4 + 1] = palette[srcPixel + 1];
-						textureData[dstRowStart + col * 4 + 2] = palette[srcPixel + 2];
-						textureData[dstRowStart + col * 4 + 3] = srcPixel === 0 ? 0 : 255;
-					}
-				}
+				const textureData = this.colourTexture(width, height, result);
 
 				result.material = {
 					id: 100 + this.material_ids++,
@@ -579,24 +640,22 @@ class MdkSceneDesc implements SceneDesc {
 
 		const renderer = new MdkRenderer(device, context, dti.levelStartLocation, dti.translucentColours);
 
-		const materialCreator = new MaterialCreator(renderer, mti, mto.materials, dti.levelPalette);
+		const materialCreator = new MaterialCreator(renderer, mti, mto.materials, dti.levelPalette, dti.skybox);
 
-		for (const arena of dti.arenas) {
-			for (const entity of arena.entities) {
-				renderer.entities.push(new Entity(entity));
-			}
-		}
 
-		const unused = [
+		const unusedArenas = [
 			"DANT_8",
 			"GUNT_9",
 			"HMO_7",
 			"OLYM_9",
 		];
 
+		renderer.objects.push(new SkyboxRenderer(renderer, device, materialCreator));
+
 		for (const arena of mto.arenas) {
-			if (unused.includes(arena.name))
+			if (unusedArenas.includes(arena.name))
 				continue;
+
 			materialCreator.setArena(arena.name, arena.materials, arena.palettePart);
 			renderer.objects.push(new ObjectRenderer(renderer, device, arena.bsp, materialCreator));
 
@@ -608,6 +667,13 @@ class MdkSceneDesc implements SceneDesc {
 				}
 			}
 		}
+
+		for (const arena of dti.arenas) {
+			for (const entity of arena.entities) {
+				renderer.entities.push(new Entity(entity));
+			}
+		}
+
 
 		return renderer;
 	}
