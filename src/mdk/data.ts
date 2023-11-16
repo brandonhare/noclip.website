@@ -1,6 +1,8 @@
 import { mat4, vec3, vec4 } from "gl-matrix";
 import ArrayBufferSlice from "../ArrayBufferSlice.js";
+import { NamedArrayBufferSlice } from "../DataFetcher.js";
 import { AABB } from "../Geometry.js";
+import { clamp } from "../MathHelpers.js";
 import { align, assert, assertExists, readString } from "../util.js";
 
 export type DtiData = {
@@ -519,4 +521,96 @@ export function parseMti(file: ArrayBufferSlice): MtiData {
 	}
 
 	return { textures, others };
+}
+
+
+// todo optimize
+type PathPoint = {
+	t: number;
+	p0: vec3; // world space position
+	v1: vec3; // tangent 1 (relative to p0)
+	v2: vec3; // tangent 2 (relative to p0)
+};
+export class Path {
+	points: PathPoint[];
+
+	constructor(points: PathPoint[]) {
+		this.points = points;
+	}
+
+	getPoint(out: vec3, t: number): vec3 {
+		t = clamp(t, 0.0, 1.0);
+
+		for (let i = 0; i < this.points.length - 1; ++i) {
+			const next_point = this.points[i + 1];
+			if (next_point.t < t) {
+				continue;
+			}
+			const point = this.points[i];
+			t = (t - point.t) / (next_point.t - point.t);
+
+			for (let j = 0; j < 3; ++j) {
+				const p = point.p0[j];
+				const v1 = point.v1[j];
+				const v2 = point.v2[j];
+				const d = next_point.p0[j] - p;
+
+				out[j] = t * (t * (t * (v1 + v2 - 2 * d) + 3 * d - 2 * v1 - v2) + v1) + p;
+			}
+
+			break;
+		}
+		return out;
+	}
+};
+
+function readPath(data: DataView, offset: number): Path {
+	const count = data.getUint32(offset, true);
+	offset += 4;
+	const points = new Array<PathPoint>(count);
+
+	//    p   a   b
+	// t xyz xyz xyz
+	// 0 123 456 789
+
+	const max_t = data.getUint32(offset + 40 * (count - 1), true);
+	for (let i = 0; i < count; ++i) {
+		const t = data.getUint32(offset, true) / max_t;
+
+		const p0 = readVec3(data, offset + 4);
+		const v1 = readVec3(data, offset + 28);
+		const v2: vec3 = (i == count - 1) ? [0, 0, 0] : readVec3(data, offset + 56); // stored on the next point
+
+		offset += 40;
+
+		points[i] = {
+			t, p0, v1, v2
+		};
+	}
+
+	return new Path(points);
+}
+
+export function parseCmi(file: NamedArrayBufferSlice): { path: Path, offset: string; }[] {
+
+	// todo
+	const offsets: { [key: string]: number[]; } = {
+		LEVEL3: [
+			0x6a64, 0x6b80, 0x6c9c, 0x6db8, 0x9d78, 0x9df4, 0x9e70, 0x9eec, 0x9f68, 0x9fe4, 0xa104, 0xa1a8, 0xa24c, 0xa340, 0xa434, 0xb298, 0xb364, 0xb430, 0xffbc, 0x1444c, 0x144c8, 0x14544, 0x18bb0, 0x18ccc, 0x18de8, 0x18f04, 0x19020, 0x1918c, 0x192a8, 0x1943c, 0x1ee00, 0x1fb9c,],
+		LEVEL4: [
+			0x4777, 0x4a6b, 0x9b5b, 0x9cc7, 0x9e5b, 0x9ed7, 0x9f53, 0xc70f, 0xc8cb, 0xcaaf, 0xcc1b, 0xcd37, 0x1130b, 0x11477, 0x131cb, 0x1622f, 0x19fab, 0x1a077, 0x1a1e3, 0x1a34f, 0x1a4bb, 0x206d3, 0x20817, 0x2402b, 0x24697, 0x2473b, 0x247df, 0x248fb, 0x24a17, 0x26daf, 0x26ecb, 0x26f97, 0x2a973, 0x2aa3f, 0x2e2b3, 0x2e3f7, 0x2e4c3, 0x2e62f, 0x2e74b,],
+		LEVEL5: [
+			0x4329, 0x4445, 0x4e0d, 0x60b1, 0x612d, 0xc3a9, 0xc44d,],
+		LEVEL6: [
+			0x1959, 0x1b15, 0x4dcd, 0x4e49, 0x8b0d, 0xeb49, 0x118f1, 0x11bc5, 0x11d09, 0x14549, 0x1481d, 0x14899, 0x14915, 0x17ac9, 0x17b95, 0x17f55, 0x1804d, 0x18265,],
+		LEVEL7: [
+			0x3eed, 0x4059, 0x423d, 0x43f9, 0x4605, 0x47c1, 0xd161, 0xd1dd, 0xd259, 0x16355, 0x163d1, 0x1644d, 0x165b9, 0x1a969, 0x1a9e5, 0x1aa61, 0x1aadd, 0x1ab59, 0x1ac75, 0x1ad91, 0x1aead, 0x1afc9, 0x1b0e5, 0x1b1dd, 0x1b281, 0x206f5, 0x20749, 0x2079d, 0x207f1, 0x20845, 0x20899, 0x208ed, 0x20941, 0x235d9, 0x2367d,],
+		LEVEL8: [
+			0x42b7, 0x43ab, 0x4477, 0x861b, 0x875f, 0xf84b, 0xf917, 0xf9e3, 0xfaaf, 0x13373, 0x1343f, 0x1adfb, 0x1af17, 0x1b033, 0x1b0ff, 0x23c67, 0x23dd3,],
+	};
+
+	const data = file.createDataView(4);
+	return offsets[/TRAVERSE\/(\w+)\//.exec(file.name)![1]].map((offset) => {
+		return { path: readPath(data, offset), offset: offset.toString(16) };
+	});
 }
