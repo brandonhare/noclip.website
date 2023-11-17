@@ -103,10 +103,13 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 			const a = data.getInt32(entityOffset + 4, true);
 			const b = data.getInt32(entityOffset + 8, true);
 			const pos = readVec3(data, entityOffset + 12);
-			const entityData =
+			let entityData =
 				(entityType === 2 || entityType === 4)
 					? readString(file, entityOffset + 24, 12)
 					: readVec3(data, entityOffset + 24);
+			if (entityType === 2 || entityType === 4) {
+				entityData = `${arenaName}$${entityData}_${a}`;
+			}
 			entityOffset += 36;
 			entities[j] = { entityType, a, b, pos, data: entityData };
 		}
