@@ -276,22 +276,32 @@ class ObjectPanel extends UI.Panel {
 class Entity {
 	msg: string;
 	constructor(public data: DtiEntityData) {
-		this.msg = `${this.data.entityType},${this.data.a},${this.data.b}`;
-		if (typeof (data.data) === "string")
-			this.msg += " - " + data.data;
+		switch (data.entityType) {
+			case 1: this.msg = `ArenaShowZone (${data.id})`; break;
+			case 2: this.msg = `Hotgen (${data.id}, ${data.value}, ${data.data})`; break;
+			case 3: this.msg = `ArenaActivateZone (${data.id})`; break;
+			case 4: this.msg = `Hotpick (${data.id}, ${data.data})`; break;
+			case 5: this.msg = `HidingSpot (${data.id})`; break;
+			case 6: this.msg = `ArenaConnectZone (${data.id}, ${data.value})`; break;
+			case 7: this.msg = `Fan (${data.id})`; break;
+			case 8: this.msg = `JumpPoint (${data.id})`; break;
+			case 9: this.msg = `Slidething (${data.id}, ${data.value})`; break;
+			default: this.msg = `Unknown (${data.id}, ${data.value}, ${data.data})`; break;
+		}
 	}
 	prepareToRender(renderer: MdkRenderer, renderInstManager: GfxRenderInstManager, viewerInput: Viewer.ViewerRenderInput) {
 		const ctx = DebugJunk.getDebugOverlayCanvas2D();
 		const mat = viewerInput.camera.clipFromWorldMatrix;
 
 
-		const entType = this.data.entityType;
-		if (typeof (this.data.data) !== "string" && entType !== 5 && entType !== 8) {
+		if (typeof (this.data.data) !== "string") {
 			const p1 = this.data.pos;
 			const p2 = this.data.data;
-			DebugJunk.drawWorldSpaceAABB(ctx, mat, new AABB(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]));
-			DebugJunk.drawWorldSpaceText(ctx, mat, [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, (p1[2] + p2[2]) / 2], this.msg, 0);
-			return;
+			if (p2[0] !== 0.0 && p2[1] !== 0.0 && p2[2] !== 0.0) {
+				DebugJunk.drawWorldSpaceAABB(ctx, mat, new AABB(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2]));
+				DebugJunk.drawWorldSpaceText(ctx, mat, [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, (p1[2] + p2[2]) / 2], this.msg, 0);
+				return;
+			}
 		}
 
 		DebugJunk.drawWorldSpaceText(ctx, mat, this.data.pos, this.msg, 10);

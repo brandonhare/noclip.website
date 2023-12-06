@@ -24,8 +24,8 @@ export type DtiArenaData = {
 };
 export type DtiEntityData = {
 	entityType: number,
-	a: number,
-	b: number,
+	id: number,
+	value: number,
 	pos: vec3,
 	data: vec3 | string,
 };
@@ -100,18 +100,15 @@ export function parseDti(file: ArrayBufferSlice): DtiData {
 		const entities = new Array<DtiEntityData>(numEntities);
 		for (let j = 0; j < numEntities; ++j) {
 			const entityType = data.getInt32(entityOffset, true);
-			const a = data.getInt32(entityOffset + 4, true);
-			const b = data.getInt32(entityOffset + 8, true);
+			const id = data.getInt32(entityOffset + 4, true);
+			const value = data.getInt32(entityOffset + 8, true);
 			const pos = readVec3(data, entityOffset + 12);
 			let entityData =
 				(entityType === 2 || entityType === 4)
-					? readString(file, entityOffset + 24, 12)
+					? `${arenaName}$${readString(file, entityOffset + 24, 12)}_${id}`
 					: readVec3(data, entityOffset + 24);
-			if (entityType === 2 || entityType === 4) {
-				entityData = `${arenaName}$${entityData}_${a}`;
-			}
 			entityOffset += 36;
-			entities[j] = { entityType, a, b, pos, data: entityData };
+			entities[j] = { entityType, id, value, pos, data: entityData };
 		}
 		arenas[i] = { name: arenaName, num: arenaNum, entities };
 	}
